@@ -1,0 +1,14 @@
+# Colab environment — PINN training only, GPU.
+#
+# Colab's default runtime already provides torch, numpy, and matplotlib.
+# This file lists only extra project-specific dependencies on top of that.
+# DOLFINx is intentionally NOT listed: Colab never runs FEM code and never
+# needs FEM data — training is physics-only (PDE residual, IC/BC, and the
+# energy-stability penalty are all computed from the network's own
+# predictions, not from FEM reference data).
+#
+# Usage in a Colab cell:
+#   !pip install -r requirements-colab.txt
+
+scipy
+tqdm

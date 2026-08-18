@@ -1,0 +1,40 @@
+# Local (WSL2/conda) environment for FEM baseline + PINN code authoring/smoke-testing.
+#
+# NOTE: This machine already has a working DOLFINx install in the `fenicsx-env`
+# conda environment. Rather than duplicating the (large) DOLFINx/PETSc/mpich
+# stack in a new env, this file documents the packages `fenicsx-env` should
+# have and can be applied with:
+#
+#   conda env update -n fenicsx-env -f environment.yml --prune
+#
+# If you are setting up on a fresh machine with no existing DOLFINx install,
+# create it fresh instead:
+#
+#   conda env create -f environment.yml
+#
+# IMPORTANT: DOLFINx must come from conda-forge, not pip.
+# IMPORTANT: Legacy FEniCS (the old `dolfin` package) tutorials/APIs are NOT
+# compatible with DOLFINx (`dolfinx`) — they are different projects with a
+# similar name. Only follow DOLFINx-specific documentation and demos.
+name: fenicsx-env
+channels:
+  - conda-forge
+dependencies:
+  # FEM baseline (DOLFINx)
+  - fenics-dolfinx
+  - mpich
+  - pyvista
+  - petsc4py
+
+  # PyTorch CPU-only build — only used here for writing/smoke-testing PINN
+  - pytorch
+  - cpuonly
+
+  # Shared tooling
+  - numpy
+  - scipy
+  - matplotlib
+  - jupyterlab
+  - pytest
+  - black
+  - ruff

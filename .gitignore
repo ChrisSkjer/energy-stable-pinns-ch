@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# Trained model weights (regenerable; keep latest checkpoint locally only)
+*.pt
+*.pth
+
+# FEM reference solutions and other generated data (regenerable from src/fem, stays local)
+data/*
+!data/.gitkeep
+
+# Results: figures, logs, benchmark tables (regenerable from experiments)
+results/*
+!results/.gitkeep
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# FEniCSx / DOLFINx output formats
+*.xdmf
+*.h5
