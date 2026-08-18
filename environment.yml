@@ -16,9 +16,19 @@
 # IMPORTANT: Legacy FEniCS (the old `dolfin` package) tutorials/APIs are NOT
 # compatible with DOLFINx (`dolfinx`) — they are different projects with a
 # similar name. Only follow DOLFINx-specific documentation and demos.
+#
+# IMPORTANT: use `--override-channels` (or run `conda config --add channels
+# conda-forge` + `conda config --set channel_priority strict` once) when
+# applying this file. This machine's base conda config only lists the
+# `defaults` channel; mixing `defaults` with `conda-forge` on a stack this
+# complex (DOLFINx/PETSc) makes the solver pathologically slow. `cpuonly` is
+# a PyTorch-channel package (not on conda-forge) and is deliberately not
+# listed here — conda-forge's `pytorch` build resolves to a CPU-only variant
+# automatically when no CUDA virtual package is present.
 name: fenicsx-env
 channels:
   - conda-forge
+  - nodefaults
 dependencies:
   # FEM baseline (DOLFINx)
   - fenics-dolfinx
@@ -26,9 +36,9 @@ dependencies:
   - pyvista
   - petsc4py
 
-  # PyTorch CPU-only build — only used here for writing/smoke-testing PINN
+  # PyTorch — only used here for writing/smoke-testing PINN on CPU;
+  # conda-forge picks the CPU build automatically on this machine.
   - pytorch
-  - cpuonly
 
   # Shared tooling
   - numpy
