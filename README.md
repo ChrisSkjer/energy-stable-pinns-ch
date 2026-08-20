@@ -45,9 +45,25 @@ This is a two-machine project:
 
 ## Local environment setup
 
-This machine already has a conda environment named `fenicsx-env` with a
-working DOLFINx install. Bring it up to date with the rest of the project's
-dependencies:
+DOLFINx does not run natively on Windows, only on Linux — so `conda
+activate fenicsx-env` only works **inside a WSL2 shell**, never in a plain
+Windows PowerShell or cmd prompt (including VS Code's *default* integrated
+terminal, which is PowerShell unless you change it). If `conda activate`
+fails with something like `conda: command not found` or `'conda' is not
+recognized`, that's almost always the cause: you're not in WSL yet.
+
+**Step 1 — get into a WSL shell.** Any of:
+- Open a **Windows Terminal** tab/profile named "Ubuntu" (or whatever your
+  WSL distro is called), or
+- From PowerShell or cmd, just run `wsl`, or
+- In VS Code: `Ctrl+Shift+P` → "WSL: Reopen Folder in WSL" (opens the whole
+  editor, including its integrated terminal, inside WSL).
+
+You know you're in the right place when the prompt looks like
+`chris@yourmachine:/mnt/c/git/energy-stable-pinns-ch$`, not
+`PS C:\git\energy-stable-pinns-ch>`.
+
+**Step 2 — activate the environment** (now that you're in WSL):
 
 ```bash
 conda env update -n fenicsx-env -f environment.yml --prune
@@ -57,12 +73,25 @@ conda activate fenicsx-env
 (On a machine with no existing DOLFINx install, `conda env create -f
 environment.yml` instead.)
 
+**Step 3 — verify it actually worked:**
+
+```bash
+python -c "import dolfinx; print(dolfinx.__version__)"
+```
+
+If that prints a version number, you're set up correctly and can run FEM
+commands as below. If it errors, the conda env doesn't have DOLFINx —
+re-check Step 2, not the WSL step.
+
 **Note:** DOLFINx must be installed from `conda-forge`, not `pip`. Also note
 that legacy FEniCS (the old `dolfin` package) tutorials and APIs are **not**
 compatible with DOLFINx (`dolfinx`) — they are different projects despite the
 similar name. Only follow DOLFINx-specific documentation.
 
 ## Running the FEM baseline
+
+Requires an activated `fenicsx-env` inside WSL2 (see setup above — you
+should see `(fenicsx-env)` in your prompt before running this):
 
 ```bash
 python src/fem/cahn_hilliard.py --output-dir results/my_run
