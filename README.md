@@ -62,6 +62,34 @@ that legacy FEniCS (the old `dolfin` package) tutorials and APIs are **not**
 compatible with DOLFINx (`dolfinx`) — they are different projects despite the
 similar name. Only follow DOLFINx-specific documentation.
 
+## Running the FEM baseline
+
+```bash
+python src/fem/cahn_hilliard.py --output-dir results/my_run
+```
+
+Every field on `CahnHilliardConfig` (`src/fem/cahn_hilliard.py`) is exposed
+as a matching CLI flag automatically (`nx` → `--nx`, `epsilon` → `--epsilon`,
+`visualize` → `--visualize`/`--no-visualize`, etc.) — run `--help` to see the
+full list. Two flags control where output goes, not the physics:
+
+- `--output-dir PATH` — where the run writes `cahn_hilliard_diagnostics.csv`
+  (t, free_energy, total_mass) and, if `--visualize` is set, `frames/*.png`.
+  **Defaults to `data/` if you don't pass it.**
+- `--overwrite` — required if `--output-dir` already contains a previous
+  run's results. **Without a flag at all, the solver refuses to run and
+  errors out** rather than silently clobbering the last run — this is what
+  protects an overnight run from being erased by a later invocation that
+  forgot to pick a new folder.
+
+**Naming convention:** for a throwaway smoke test, omit `--output-dir`
+entirely and pass `--overwrite` each time — you don't want to keep those.
+For any run whose output you might actually reference (a figure, a number
+for the thesis), give it a descriptive folder under `results/` that encodes
+the config, e.g. `results/eps0.02_nx250_dt2e-7/`, and tag the commit that
+produced it (`git tag -a fem-baseline-v1 -m "..."`) so the folder name and
+the tag can point at each other later.
+
 ## Training on Colab
 
 1. Clone the repo in a Colab cell and `pip install -r requirements-colab.txt`
@@ -74,5 +102,6 @@ See [docs/colab_workflow.md](docs/colab_workflow.md) for the full walkthrough.
 
 ## Status
 
-Work in progress — repository scaffolding stage. Model, loss, training, and
-FEM solver modules are currently skeletons.
+Work in progress. The FEM baseline (`src/fem/cahn_hilliard.py`) is working
+end-to-end (mesh, weak form, adaptive time stepping, diagnostics, PNG
+snapshots). PINN model, loss, and training modules are still skeletons.
