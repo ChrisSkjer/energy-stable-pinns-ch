@@ -119,6 +119,20 @@ the config, e.g. `results/eps0.02_nx250_dt2e-7/`, and tag the commit that
 produced it (`git tag -a fem-baseline-v1 -m "..."`) so the folder name and
 the tag can point at each other later.
 
+**Where to view the output:**
+
+- `<output-dir>/cahn_hilliard_diagnostics.csv` — plot with pandas/matplotlib
+  (`pd.read_csv(...).plot(x="t", y="free_energy")`), or open it directly in
+  VS Code's built-in CSV viewer (click the file — it renders as a table/chart).
+- `<output-dir>/frames/frame_*.png` — click any frame in VS Code's file
+  explorer to preview it inline, no other tool needed. To turn a full frame
+  sequence into an animation for the thesis:
+  ```bash
+  ffmpeg -framerate 10 -i frame_%06d.png -pix_fmt yuv420p output.mp4
+  ```
+  (run from inside the `frames/` folder; `ffmpeg` isn't in `environment.yml`
+  yet — `conda install -n fenicsx-env -c conda-forge ffmpeg` if you want it.)
+
 ## Training on Colab
 
 1. Clone the repo in a Colab cell and `pip install -r requirements-colab.txt`
