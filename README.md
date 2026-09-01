@@ -133,6 +133,41 @@ the tag can point at each other later.
   (run from inside the `frames/` folder; `ffmpeg` isn't in `environment.yml`
   yet — `conda install -n fenicsx-env -c conda-forge ffmpeg` if you want it.)
 
+## Quick PINN demo (Windows, CPU, no WSL)
+
+[notebooks/pinn_demo.ipynb](notebooks/pinn_demo.ipynb) is a small
+self-contained PINN for getting a feel for how one trains and what it
+produces. It is a sandbox, not thesis code: it imports nothing from `src/`,
+uses only the standard loss terms (PDE residual + IC + BC), and has no energy
+penalty or transfer learning. The last cell maps its pieces back onto the real
+modules.
+
+It needs only `torch` (CPU), `matplotlib`, and `ipykernel`, so it runs in plain
+Windows Python — no WSL, no DOLFINx. One-time setup:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install torch matplotlib ipykernel --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+```
+
+(`.venv/` is gitignored.) Then open the notebook in VS Code and pick `.venv`
+in the kernel selector, top right — or `Ctrl+Shift+P` → "Python: Select
+Interpreter" → `.venv` to make it this workspace's default.
+
+The notebook runs top to bottom in about two minutes on a laptop CPU:
+
+- **1D heat equation** (~45 s) — has a closed-form solution, so the notebook
+  reports a true relative L2 error; with the given settings it reaches ~1e-3.
+  Start here, it is the part that tells you the machinery works.
+- **1D Cahn-Hilliard** (~80 s) — the mixed (c, mu) formulation on a
+  deliberately gentle configuration (eps = 0.05, t in [0, 0.05], smooth cosine
+  IC), reporting mass drift and free-energy monotonicity instead of an error.
+  Shrink `epsilon`, stretch the time window, or cut the epoch count and those
+  two diagnostics are the first thing to degrade — the thesis' motivation in
+  miniature. Both sections end with a list of things to try.
+
+Figures render inline; save any you want to keep under `results/`.
+
 ## Training on Colab
 
 1. Clone the repo in a Colab cell and `pip install -r requirements-colab.txt`

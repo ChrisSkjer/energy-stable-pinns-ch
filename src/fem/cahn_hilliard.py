@@ -67,6 +67,7 @@ class CahnHilliardConfig:
     seed: int = 42  # random seed for the initial condition
     visualize: bool = True  # save concentration-field PNG frames
     viz_every: int = 1  # save a frame every N time steps (if visualize)
+    show_gridpoints: bool = True  # overlay mesh vertices on the solution frames
     adaptive_dt: bool = True  # halve dt and retry when a Newton solve fails
     dt_min: float = 1.0e-12  # give up if an adaptive step falls below this
 
@@ -96,7 +97,9 @@ class _DiagnosticsLogger:
 class _FrameWriter:
     """Off-screen PNG snapshots of the concentration field, saved to disk."""
 
-    def __init__(self, output_dir: str, every: int, V0, dofs) -> None:
+    def __init__(
+        self, output_dir: str, every: int, V0, dofs, show_gridpoints: bool = False
+    ) -> None:
         if every < 1:
             raise ValueError("viz_every must be at least 1")
         if not _HAVE_PYVISTA:
@@ -107,6 +110,7 @@ class _FrameWriter:
         self.every = every
         # some DOLFINx versions wrap the dof array in a single-element list
         self.dofs = dofs[0] if isinstance(dofs, list) else dofs
+        self.show_gridpoints = show_gridpoints
         self.frames_dir = Path(output_dir) / "frames"
         self.frames_dir.mkdir(parents=True, exist_ok=True)
 
@@ -120,6 +124,13 @@ class _FrameWriter:
         self.grid.set_active_scalars("c")
         plotter = pv.Plotter(off_screen=True)
         plotter.add_mesh(self.grid, clim=[0, 1])
+        if self.show_gridpoints:
+            plotter.add_points(
+                self.grid.points,
+                color="black",
+                point_size=3,
+                render_points_as_spheres=True,
+            )
         plotter.view_xy(negative=True)
         plotter.add_text(f"time: {t:.2e}", font_size=12, name="timelabel")
         plotter.screenshot(str(self.frames_dir / f"frame_{step:06d}.png"))
@@ -240,7 +251,7 @@ def solve(
     u.x.scatter_forward()
 
     c = ufl.variable(c)
-    f = 100 * c**2 * (1 - c) ** 2  # double-well bulk free-energy density
+    f = 1/4 * (1 - c**2) ** 2  # double-well bulk free-energy density; kan endre se notat
     dfdc = ufl.diff(f, c)
 
     lam = config.epsilon**2  # interfacial-energy coefficient
@@ -301,7 +312,9 @@ def solve(
     frames = None
     if config.visualize:
         V0, dofs = ME.sub(0).collapse()
-        frames = _FrameWriter(output_dir, config.viz_every, V0, dofs)
+        frames = _FrameWriter(
+            output_dir, config.viz_every, V0, dofs, config.show_gridpoints
+        )
 
     diagnostics = _DiagnosticsLogger(output_dir, config.log_every)
     try:

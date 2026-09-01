@@ -16,6 +16,9 @@ data/*
 results/*
 !results/.gitkeep
 
+# Local Windows/CPU virtualenv for the PINN demo (torch, matplotlib)
+.venv/
+
 # Editors / OS
 .vscode/
 .idea/
