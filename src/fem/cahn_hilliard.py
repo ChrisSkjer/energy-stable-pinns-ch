@@ -123,7 +123,7 @@ class _FrameWriter:
         self.grid.point_data["c"] = u_array[self.dofs].real
         self.grid.set_active_scalars("c")
         plotter = pv.Plotter(off_screen=True)
-        plotter.add_mesh(self.grid, clim=[0, 1])
+        plotter.add_mesh(self.grid, clim=[-1, 1])
         if self.show_gridpoints:
             plotter.add_points(
                 self.grid.points,
@@ -172,7 +172,12 @@ def build_function_space(mesh):
 
 
 def _spinodal_initial_condition(seed: int, k_max: int = 4):
-    """Smooth low-wavenumber perturbation around c=0.63, for the CH IC.
+    """Smooth low-wavenumber perturbation around c=0, for the CH IC.
+
+    The bulk free energy is the symmetric double well f = 1/4 (1 - c^2)^2
+    with minima at c = -1 and c = +1 (the two phases), so a spinodal
+    quench is seeded from the symmetric mixture c = 0 with a small
+    perturbation.
 
     Independent per-vertex noise (one random value per mesh vertex, as in
     the official DOLFINx demo) makes the initial field rougher as the mesh
@@ -194,7 +199,7 @@ def _spinodal_initial_condition(seed: int, k_max: int = 4):
         val = np.zeros_like(x[0])
         for kx, ky, amp, phase in modes:
             val += amp * np.cos(2 * np.pi * kx * x[0] + 2 * np.pi * ky * x[1] + phase)
-        return 0.63 + 0.01 * val / np.max(np.abs(val))
+        return 0.05 * val / np.max(np.abs(val))
 
     return ic
 
@@ -251,7 +256,8 @@ def solve(
     u.x.scatter_forward()
 
     c = ufl.variable(c)
-    f = 1/4 * (1 - c**2) ** 2  # double-well bulk free-energy density; kan endre se notat
+    # symmetric double-well bulk free-energy density; phases at c = -1, +1
+    f = 1 / 4 * (1 - c**2) ** 2  # kan endre, se notat
     dfdc = ufl.diff(f, c)
 
     lam = config.epsilon**2  # interfacial-energy coefficient
