@@ -133,7 +133,7 @@ the tag can point at each other later.
   (run from inside the `frames/` folder; `ffmpeg` isn't in `environment.yml`
   yet — `conda install -n fenicsx-env -c conda-forge ffmpeg` if you want it.)
 
-## Quick PINN demo (Windows, CPU, no WSL)
+## Quick PINN demo (no setup — run it in Colab)
 
 [notebooks/pinn_demo.ipynb](notebooks/pinn_demo.ipynb) is a small
 self-contained PINN for getting a feel for how one trains and what it
@@ -142,8 +142,26 @@ uses only the standard loss terms (PDE residual + IC + BC), and has no energy
 penalty or transfer learning. The last cell maps its pieces back onto the real
 modules.
 
-It needs only `torch` (CPU), `matplotlib`, and `ipykernel`, so it runs in plain
-Windows Python — no WSL, no DOLFINx. One-time setup:
+**Easiest way to run it: Colab.** The notebook imports only `math`, `time`,
+`torch`, and `matplotlib` — all of which Colab's default runtime already has,
+so there is nothing to clone, install, or `pip` first. Just open it and hit
+run:
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ChrisSkjer/energy-stable-pinns-ch/blob/main/notebooks/pinn_demo.ipynb)
+
+<https://colab.research.google.com/github/ChrisSkjer/energy-stable-pinns-ch/blob/main/notebooks/pinn_demo.ipynb>
+
+That link opens whatever is on `main` in GitHub, so push before you expect a
+change to show up there, and use *File → Save a copy in Drive* if you want to
+keep your edits. Two Colab-only notes: the CPU runtime is enough (it is a
+1D toy problem — GPU is optional, and if you do pick one, set
+`device = torch.device("cuda")` in the setup cell), and the `../results/...`
+save path in the last section does not exist there, so figures live only in
+the session unless you save them to Drive.
+
+**Alternative: locally on Windows, no WSL.** It needs only `torch` (CPU),
+`matplotlib`, and `ipykernel`, so plain Windows Python works — no WSL, no
+DOLFINx. One-time setup:
 
 ```powershell
 python -m venv .venv
@@ -154,7 +172,8 @@ python -m venv .venv
 in the kernel selector, top right — or `Ctrl+Shift+P` → "Python: Select
 Interpreter" → `.venv` to make it this workspace's default.
 
-The notebook runs top to bottom in about two minutes on a laptop CPU:
+Either way, the notebook runs top to bottom in about two minutes on a laptop
+CPU:
 
 - **1D heat equation** (~45 s) — has a closed-form solution, so the notebook
   reports a true relative L2 error; with the given settings it reaches ~1e-3.

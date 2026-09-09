@@ -43,3 +43,15 @@ reference solutions.
 
 The `.pt` checkpoint is the only artifact that needs to travel between the
 two machines.
+
+## Side note: the demo notebook needs none of this
+
+[../notebooks/pinn_demo.ipynb](../notebooks/pinn_demo.ipynb) is self-contained
+— it imports only `torch` and `matplotlib`, both already present in Colab's
+default runtime — so it needs no clone and no `pip install`. Open it directly
+from GitHub:
+
+<https://colab.research.google.com/github/ChrisSkjer/energy-stable-pinns-ch/blob/main/notebooks/pinn_demo.ipynb>
+
+The clone-and-install steps above are only for training the real `src/pinn/`
+code.

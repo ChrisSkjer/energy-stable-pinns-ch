@@ -44,13 +44,28 @@ except ModuleNotFoundError:
 class CahnHilliardConfig:
     """Parameters for a Cahn-Hilliard FEM run.
 
-    NOTE: nx/ny, epsilon and dt are physically coupled and cannot be chosen
-    independently. The mesh must resolve the interface (h <~ epsilon/4), and
-    the time step must be small enough for the Newton solve to converge --
-    both get more demanding as epsilon shrinks. The defaults below are a fast
-    *smoke* configuration that is known to work; production thesis runs should
-    override them, e.g. a resolved epsilon=0.02 run needs roughly
-    `--nx 200 --ny 200 --dt 2e-7`, which is far slower.
+    NOTE: nx/ny, epsilon, dt and t_final are physically coupled and cannot be
+    chosen independently. Three constraints tie them together:
+
+    1. The mesh must resolve the interface: h <~ epsilon/4, i.e. nx >~ 4/epsilon.
+    2. Spinodal decomposition runs on the timescale set by the bulk well. For
+       f = 1/4 (1 - c^2)^2 linear stability gives a fastest growth rate
+       sigma_max = mobility/(4*epsilon^2), so the timescale is
+       tau = 4*epsilon^2/mobility. Take dt ~ tau/50 and t_final ~ 50*tau --
+       phase separation completes in roughly 30-60 tau.
+    3. epsilon must be well below the domain size or the phases never form.
+       The fastest-growing wavelength is ~8.9*epsilon, so on the unit square
+       epsilon=0.1 gives a single blob that stalls at c ~ +-0.87 and never
+       reaches the pure phases; epsilon <= 0.05 separates properly.
+
+    Beware of copying dt/t_final from the DOLFINx Cahn-Hilliard demo: it uses
+    f = 100*c^2*(1-c)^2 on c in [0, 1], a well ~100x stiffer than the one here,
+    so its dt=5e-6 / t_final=2.5e-4 are ~4 orders of magnitude too short for
+    this f and produce a field that visibly never changes.
+
+    The defaults below are a fast *smoke* configuration (epsilon=0.05, ~2
+    blobs per side, tau=0.01). A resolved thesis run at epsilon=0.02 needs
+    roughly `--nx 200 --ny 200 --dt 3e-5 --t-final 0.4`, which is far slower.
 
     When `adaptive_dt` is set the solver retries a failed step with a halved
     dt rather than aborting, so a slightly-too-large dt self-corrects.
@@ -58,16 +73,16 @@ class CahnHilliardConfig:
 
     nx: int = 96
     ny: int = 96
-    epsilon: float = 0.1  # interface-width parameter
+    epsilon: float = 0.01  # interface-width parameter; needs nx >~ 4/epsilon
     mobility: float = 1.0
-    dt: float = 5.0e-6  # initial/maximum step; reduced on demand if adaptive_dt
-    t_final: float = 2.5e-4
+    dt: float = 2.0e-4  # ~tau/50; initial/maximum step, reduced if adaptive_dt
+    t_final: float = 0.5  # ~50*tau, enough for full separation at epsilon=0.05
     theta: float = 0.5  # Crank-Nicolson parameter
     log_every: int = 1  # write diagnostics every N time steps
     seed: int = 42  # random seed for the initial condition
     visualize: bool = True  # save concentration-field PNG frames
-    viz_every: int = 1  # save a frame every N time steps (if visualize)
-    show_gridpoints: bool = True  # overlay mesh vertices on the solution frames
+    viz_every: int = 25  # save a frame every N time steps (if visualize)
+    show_gridpoints: bool = False  # overlay mesh vertices on the solution frames
     adaptive_dt: bool = True  # halve dt and retry when a Newton solve fails
     dt_min: float = 1.0e-12  # give up if an adaptive step falls below this
 
@@ -94,6 +109,26 @@ class _DiagnosticsLogger:
         self.file.close()
 
 
+def _phase_colormap():
+    """Diverging blue<->red colormap for c in [-1, 1], neutral gray at c=0.
+
+    c is a *polarity* field, not a magnitude one: the two phases sit at c=-1
+    and c=+1 either side of a meaningful midpoint at c=0. A sequential map
+    (matplotlib's default viridis) implies a low-to-high ramp and buries that
+    symmetry -- the c=0 mixed state lands mid-ramp instead of reading as
+    "neither phase". A diverging map with a neutral midpoint puts the two
+    phases at opposite poles and lets interfaces show up as the gray band.
+    """
+    try:
+        from matplotlib.colors import LinearSegmentedColormap
+    except ModuleNotFoundError:  # pyvista ships equivalent built-ins
+        return "coolwarm"
+    # blue (c=-1) -> neutral gray (c=0) -> red (c=+1), equal arms
+    return LinearSegmentedColormap.from_list(
+        "phase", ["#2a78d6", "#f0efec", "#e34948"]
+    )
+
+
 class _FrameWriter:
     """Off-screen PNG snapshots of the concentration field, saved to disk."""
 
@@ -117,13 +152,38 @@ class _FrameWriter:
         topology, cell_types, x = plot.vtk_mesh(V0)
         self.grid = pv.UnstructuredGrid(topology, cell_types, x)
 
+        self.cmap = _phase_colormap()
+        # Vertical bar down the right-hand side. The pyvista default is a wide
+        # horizontal bar with its title centred *above* the ticks, which puts
+        # the title "c" straight on top of the "0.00" label; going vertical
+        # removes the collision and stops the bar crowding the square domain.
+        self.scalar_bar_args = dict(
+            title="c",
+            vertical=True,
+            position_x=0.86,
+            position_y=0.22,
+            width=0.05,
+            height=0.56,
+            n_labels=5,
+            fmt="%.1f",  # -1.0/-0.5/0.0/0.5/1.0, not the default -1.00/-0.500
+            title_font_size=18,
+            label_font_size=15,
+            color="black",
+        )
+
     def save(self, step: int, t: float, u_array) -> None:
         if step % self.every != 0:
             return
         self.grid.point_data["c"] = u_array[self.dofs].real
         self.grid.set_active_scalars("c")
-        plotter = pv.Plotter(off_screen=True)
-        plotter.add_mesh(self.grid, clim=[-1, 1])
+        plotter = pv.Plotter(off_screen=True, window_size=(900, 800))
+        plotter.set_background("white")
+        plotter.add_mesh(
+            self.grid,
+            cmap=self.cmap,
+            clim=[-1, 1],
+            scalar_bar_args=self.scalar_bar_args,
+        )
         if self.show_gridpoints:
             plotter.add_points(
                 self.grid.points,
@@ -132,7 +192,9 @@ class _FrameWriter:
                 render_points_as_spheres=True,
             )
         plotter.view_xy(negative=True)
-        plotter.add_text(f"time: {t:.2e}", font_size=12, name="timelabel")
+        plotter.add_text(
+            f"time: {t:.2e}", font_size=12, color="black", name="timelabel"
+        )
         plotter.screenshot(str(self.frames_dir / f"frame_{step:06d}.png"))
         plotter.close()
 
@@ -238,6 +300,33 @@ def solve(
             f"mesh element size (~{h:.4g}) is coarse relative to epsilon "
             f"({config.epsilon:.4g}); the interface may be under-resolved. "
             f"Increase nx/ny to ~{4 / config.epsilon:.0f}+ or use a larger epsilon.",
+            stacklevel=2,
+        )
+
+    # Spinodal timescale for f = 1/4 (1 - c^2)^2: linear stability about c=0
+    # gives growth rate sigma(k) = M k^2 (1 - lam k^2) with lam = epsilon^2,
+    # peaking at sigma_max = M/(4 epsilon^2). Both guards below catch silent
+    # "the field never changes" runs, which are easy to get by borrowing
+    # dt/t_final from the DOLFINx demo (its well is ~100x stiffer than this one).
+    tau = 4 * config.epsilon**2 / config.mobility
+    if config.t_final < 20 * tau:
+        warnings.warn(
+            f"t_final ({config.t_final:.4g}) is short next to the spinodal "
+            f"timescale tau={tau:.4g}; the field will barely move. Phase "
+            f"separation needs roughly 30-60 tau, i.e. t_final >~ {30 * tau:.3g}.",
+            stacklevel=2,
+        )
+
+    # the fastest-growing wavelength is 2*pi*sqrt(2)*epsilon; if that is not
+    # comfortably inside the unit domain the solution stalls as a single smooth
+    # blob at |c| ~ 0.87 instead of separating into the c = -1 / +1 phases
+    fastest_wavelength = 2 * np.pi * np.sqrt(2) * config.epsilon
+    if fastest_wavelength > 0.5:
+        warnings.warn(
+            f"epsilon ({config.epsilon:.4g}) is large for the unit square: the "
+            f"fastest-growing wavelength is ~{fastest_wavelength:.3g}, so the "
+            f"interface spans the domain and c will stall short of +-1 rather "
+            f"than separating. Use epsilon <~ 0.05.",
             stacklevel=2,
         )
 
