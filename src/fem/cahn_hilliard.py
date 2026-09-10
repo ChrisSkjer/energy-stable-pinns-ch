@@ -71,9 +71,9 @@ class CahnHilliardConfig:
     dt rather than aborting, so a slightly-too-large dt self-corrects.
     """
 
-    nx: int = 96
-    ny: int = 96
-    epsilon: float = 0.01  # interface-width parameter; needs nx >~ 4/epsilon
+    nx: int = 200
+    ny: int = 200
+    epsilon: float = 0.02  # interface-width parameter; needs nx >~ 4/epsilon
     mobility: float = 1.0
     dt: float = 2.0e-4  # ~tau/50; initial/maximum step, reduced if adaptive_dt
     t_final: float = 0.5  # ~50*tau, enough for full separation at epsilon=0.05
@@ -233,35 +233,61 @@ def build_function_space(mesh):
     return functionspace(mesh, mixed_element([P1, P1]))
 
 
-def _spinodal_initial_condition(seed: int, k_max: int = 4):
-    """Smooth low-wavenumber perturbation around c=0, for the CH IC.
+# --- "Swiss flag" cross initial condition ----------------------------------
+# Proportions follow the Swiss flag: arms 6 units wide and 20 units long on a
+# 32-unit square, rescaled to the unit square. That gives an area fraction of
+# ~0.199, i.e. a limiting circle of radius sqrt(0.199/pi) ~ 0.25.
+_IC_ARM_HALF_W = (6.0 / 32.0) / 2.0  # half-width of an arm  = 0.09375
+_IC_ARM_HALF_L = (20.0 / 32.0) / 2.0  # half-length of an arm = 0.3125
+_IC_CENTER = (0.5, 0.5)
 
-    The bulk free energy is the symmetric double well f = 1/4 (1 - c^2)^2
-    with minima at c = -1 and c = +1 (the two phases), so a spinodal
-    quench is seeded from the symmetric mixture c = 0 with a small
-    perturbation.
 
-    Independent per-vertex noise (one random value per mesh vertex, as in
-    the official DOLFINx demo) makes the initial field rougher as the mesh
-    is refined -- its gradient scales like noise_amplitude/h, so an
-    undamped Newton step diverges on fine meshes. A sum of a few low
-    wavenumber cosine modes is smooth and mesh-resolution-independent
-    instead, and is also the textbook way to seed CH spinodal decomposition
-    (small-wavenumber perturbations are what linear stability analysis says
-    triggers it).
+def _rect_sdf(px, py, half_w, half_h):
+    """Exact signed distance to an axis-aligned rectangle centred at the
+    origin, negative inside. The usual 2D box SDF: the first term measures the
+    distance once outside, the second is the (negative) distance to the nearest
+    edge while inside."""
+    qx = np.abs(px) - half_w
+    qy = np.abs(py) - half_h
+    outside = np.sqrt(np.maximum(qx, 0.0) ** 2 + np.maximum(qy, 0.0) ** 2)
+    inside = np.minimum(np.maximum(qx, qy), 0.0)
+    return outside + inside
+
+
+def _cross_sdf(xx, yy):
+    """Signed distance to the cross, i.e. the union of a horizontal and a
+    vertical bar. A union of SDFs is min(...): exact outside the cross, and a
+    slight under-estimate only in the small pocket near the re-entrant corners
+    -- harmless once it is squashed through a tanh."""
+    px = xx - _IC_CENTER[0]
+    py = yy - _IC_CENTER[1]
+    horizontal = _rect_sdf(px, py, _IC_ARM_HALF_L, _IC_ARM_HALF_W)
+    vertical = _rect_sdf(px, py, _IC_ARM_HALF_W, _IC_ARM_HALF_L)
+    return np.minimum(horizontal, vertical)
+
+
+def _cross_initial_condition(epsilon: float):
+    """Swiss-flag cross: c = +1 on the cross, c = -1 on the background, joined
+    by the equilibrium Cahn-Hilliard interface profile
+
+        c = -tanh(d / (sqrt(2) epsilon)),
+
+    where d is the signed distance to the cross boundary (negative inside).
+    Matches `CH_initial_condition` in notebooks/pinn_CH_imp1.ipynb, so the FEM
+    run is a ground truth for that PINN.
+
+    Using the solver's own epsilon means the interface starts at its preferred
+    width, so there is no fast thickening transient at t = 0 and the early
+    dynamics are pure curvature-driven motion: the four re-entrant corners fill
+    in, the arm tips retract, and the cross relaxes towards a circle of the same
+    area (CH conserves mass, so the area is preserved).
+
+    The cross sits well clear of the walls, so c is flat there and the profile
+    is consistent with the no-flux boundary conditions.
     """
-    rng = np.random.default_rng(seed)
-    modes = [
-        (kx, ky, rng.uniform(-1.0, 1.0), rng.uniform(0.0, 2 * np.pi))
-        for kx in range(1, k_max + 1)
-        for ky in range(1, k_max + 1)
-    ]
 
     def ic(x):
-        val = np.zeros_like(x[0])
-        for kx, ky, amp, phase in modes:
-            val += amp * np.cos(2 * np.pi * kx * x[0] + 2 * np.pi * ky * x[1] + phase)
-        return 0.05 * val / np.max(np.abs(val))
+        return -np.tanh(_cross_sdf(x[0], x[1]) / (np.sqrt(2.0) * epsilon))
 
     return ic
 
@@ -341,7 +367,7 @@ def solve(
     c, mu = ufl.split(u)
     c0, mu0 = ufl.split(u0)
 
-    u.sub(0).interpolate(_spinodal_initial_condition(config.seed))
+    u.sub(0).interpolate(_cross_initial_condition(config.epsilon))
     u.x.scatter_forward()
 
     c = ufl.variable(c)
