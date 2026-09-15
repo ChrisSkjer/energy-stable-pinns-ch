@@ -187,11 +187,62 @@ CPU:
 
 Figures render inline; save any you want to keep under `results/`.
 
+## Running the PINN training (`src/pinn/train.py`)
+
+This is the real thesis training code — `src/pinn/model.py` (network),
+`src/pinn/losses.py` (PDE/IC/BC/energy loss terms), and
+`src/pinn/sampling.py` (domain point sampling) — as opposed to the
+self-contained demo notebook above.
+
+**Setup:** the same `.venv` as the demo notebook works (see "Alternative:
+locally on Windows, no WSL" above) — it only needs `torch`.
+
+**Run it as a module, not as a script.** `train.py` does
+`from src.pinn.losses import ...`, which only resolves when `src` is
+importable as a package — i.e. invoked with `-m` from the **repo root**, not
+`python src/pinn/train.py`:
+
+```powershell
+.venv\Scripts\python.exe -m src.pinn.train --smoke-test --checkpoint-path checkpoint_smoke.pt
+```
+
+**`--smoke-test`** is the fast local sanity check: it shrinks the point
+counts (100 collocation points, 10×10 IC grid, 10×10 BC grid per edge) and
+epoch counts (5 Adam epochs + 2 L-BFGS steps) so the whole run — model
+build, point sampling, Adam loop, L-BFGS loop, checkpoint save — finishes in
+a couple of seconds on CPU. It proves the code path works end to end; it
+says nothing about training quality, so don't read anything into the loss
+value it produces.
+
+**A real run** (typically on Colab GPU — see below), e.g.:
+
+```bash
+python -m src.pinn.train --device cuda --epochs 20000 --checkpoint-every 500
+```
+
+Add `--energy-penalty --energy-weight <w>` to train the enhanced model
+instead of the baseline (the energy-penalty loss term itself is not
+implemented yet — see Status). Run `--help` for the full flag list:
+domain bounds (`--x-max`/`--y-max`/`--t-max`), point counts
+(`--n-collocation`/`--n-ic`/`--n-bc`/`--pde-at-t0`), network size
+(`--hidden-layers`/`--hidden-width`), and optimizer settings
+(`--lr`, `--lbfgs-steps`).
+
+**Output:** a `.pt` checkpoint at `--checkpoint-path` (default
+`checkpoint.pt` in the working directory) holding the model's
+`state_dict()`, written every `--checkpoint-every` epochs and once more at
+the end — no other files or logs are produced. There is not yet a script
+that loads a checkpoint back and evaluates/plots it (field snapshots,
+energy/mass diagnostics); [notebooks/pinn_CH_imp1.ipynb](notebooks/pinn_CH_imp1.ipynb)
+has working versions of those checks (`plot_ch_frames`, `ch_diagnostics`,
+`phase_stats`) to use as a reference until they're ported into `src/`.
+
 ## Training on Colab
 
 1. Clone the repo in a Colab cell and `pip install -r requirements-colab.txt`
    (no FEM data needed there).
-2. Train the PINN (baseline or enhanced, via `--energy-penalty`).
+2. Train the PINN (baseline or enhanced, via `--energy-penalty`) using the
+   `-m src.pinn.train` invocation above, with `--device cuda`.
 3. Download the resulting checkpointed `.pt` weights back to the local
    machine to run inference and comparison against the local FEM output.
 
@@ -201,4 +252,9 @@ See [docs/colab_workflow.md](docs/colab_workflow.md) for the full walkthrough.
 
 Work in progress. The FEM baseline (`src/fem/cahn_hilliard.py`) is working
 end-to-end (mesh, weak form, adaptive time stepping, diagnostics, PNG
-snapshots). PINN model, loss, and training modules are still skeletons.
+snapshots). `src/pinn/` (model, losses, sampling, training loop) runs
+end-to-end for the baseline PINN — validated so far via
+`notebooks/pinn_CH_imp1.ipynb`, not yet via `src/pinn/train.py` itself on a
+full-length run. The energy-stability penalty (`energy_stability_loss`) and
+an evaluation/plotting script for `src/pinn/train.py` checkpoints are not
+implemented yet.

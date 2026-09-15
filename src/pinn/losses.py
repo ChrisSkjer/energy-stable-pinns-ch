@@ -10,7 +10,7 @@ import torch
 from torch import nn
 
 
-def pde_residual_loss(model: nn.Module, collocation_points: torch.Tensor) -> torch.Tensor:
+def pde_residual_loss(model: nn.Module, collocation_points: torch.Tensor, epsilon = 0.01, m = 1.0) -> torch.Tensor:
     """Residual of the Cahn-Hilliard PDE (mixed c/mu formulation) at
     collocation points, via automatic differentiation.
 
@@ -21,10 +21,28 @@ def pde_residual_loss(model: nn.Module, collocation_points: torch.Tensor) -> tor
     Returns:
         Scalar MSE of the PDE residual.
     """
-    # TODO: compute c, mu = model(collocation_points) (or split network outputs)
-    # TODO: compute required derivatives via torch.autograd.grad
-    # TODO: assemble the two coupled residuals (c_t - div(M grad(mu)), mu - dF/dc + eps^2 lap(c))
-    raise NotImplementedError
+    out = model(collocation_points)
+    u, mu = out[:,0:1], out[:,1:2]
+
+    u_t = torch.autograd.grad(u, collocation_points, grad_outputs=torch.ones_like(u), create_graph=True)[0][:, 2:3]
+    u_x = torch.autograd.grad(u, collocation_points, grad_outputs=torch.ones_like(u), create_graph=True)[0][:, 0:1]
+    u_y = torch.autograd.grad(u, collocation_points, grad_outputs=torch.ones_like(u), create_graph=True)[0][:, 1:2]
+    u_xx = torch.autograd.grad(u_x, collocation_points, grad_outputs=torch.ones_like(u_x), create_graph=True)[0][:, 0:1]
+    u_yy = torch.autograd.grad(u_y, collocation_points, grad_outputs=torch.ones_like(u_y), create_graph=True)[0][:, 1:2]
+
+    mu_x = torch.autograd.grad(mu, collocation_points, grad_outputs=torch.ones_like(mu), create_graph=True)[0][:, 0:1]
+    mu_y = torch.autograd.grad(mu, collocation_points, grad_outputs=torch.ones_like(mu), create_graph=True)[0][:, 1:2]
+    mu_xx = torch.autograd.grad(mu_x, collocation_points, grad_outputs=torch.ones_like(mu_x), create_graph=True)[0][:, 0:1]
+    mu_yy = torch.autograd.grad(mu_y, collocation_points, grad_outputs=torch.ones_like(mu_y), create_graph=True)[0][:, 1:2]
+
+    #f = 1/4 * (u**2 - 1)**2
+    f_u = (u**2 - 1) * u
+
+    residual_u = m * (mu_xx + mu_yy) - u_t
+    residual_mu = mu - f_u + epsilon**2 * (u_xx + u_yy)
+    loss_pde = torch.mean(residual_u**2) + torch.mean(residual_mu**2)
+
+    return loss_pde
 
 
 def ic_bc_loss(
@@ -45,9 +63,33 @@ def ic_bc_loss(
     Returns:
         Scalar combined IC + BC loss.
     """
-    # TODO: MSE between model(ic_points) and ic_values
-    # TODO: boundary condition residual (periodic / zero-flux, matching the FEM setup)
-    raise NotImplementedError
+    out_ic = model(ic_points)
+    loss_ic = torch.mean((out_ic - ic_values) ** 2)
+
+    out_bc = model(bc_points)
+    u_bc, mu_bc = out_bc[:,0:1], out_bc[:,1:2]
+    grad_u_bc = torch.autograd.grad(u_bc, bc_points, grad_outputs=torch.ones_like(u_bc), create_graph=True)[0]
+    grad_mu_bc = torch.autograd.grad(mu_bc, bc_points, grad_outputs=torch.ones_like(mu_bc), create_graph=True)[0]
+
+    n_edge = bc_points.shape[0] // 4
+    du_dn = torch.cat([
+        grad_u_bc[:n_edge, 0:1],  # left edge (x=0)
+        grad_u_bc[n_edge:2*n_edge, 0:1],  # right edge (x=1)
+        grad_u_bc[2*n_edge:3*n_edge, 1:2],  # bottom edge (y=0)
+        grad_u_bc[3*n_edge:, 1:2],  # top edge (y=1)
+    ], dim=0)
+
+    dmu_dn = torch.cat([
+        grad_mu_bc[:n_edge, 0:1],  # left edge (x=0)
+        grad_mu_bc[n_edge:2*n_edge, 0:1],   # right edge (x=1)
+        grad_mu_bc[2*n_edge:3*n_edge, 1:2],  # bottom edge (y=0)
+        grad_mu_bc[3*n_edge:, 1 :2],  # top edge (y=1)
+    ], dim=0)
+
+    loss_bc = torch.mean(du_dn**2) + torch.mean(dmu_dn**2)
+    loss_ic_bc = loss_ic + loss_bc
+   
+    return loss_ic_bc
 
 
 def energy_stability_loss(model: nn.Module, collocation_points: torch.Tensor) -> torch.Tensor:

@@ -19,6 +19,8 @@ class PINN(nn.Module):
 
     def __init__(
         self,
+        lower_bound: torch.Tensor,
+        upper_bound: torch.Tensor,
         input_dim: int = 3,
         output_dim: int = 1,
         hidden_layers: int = 4,
@@ -28,8 +30,27 @@ class PINN(nn.Module):
         super().__init__()
         # TODO: build the MLP (input_dim -> [hidden_width] * hidden_layers -> output_dim)
         # TODO: consider Xavier/Glorot init, common for tanh-activated PINNs
-        raise NotImplementedError
+        self.register_buffer("lower_bound", torch.as_tensor(lower_bound, dtype=torch.float32))
+        self.register_buffer("upper_bound", torch.as_tensor(upper_bound, dtype=torch.float32))
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.hidden_layers = hidden_layers
+        self.hidden_width = hidden_width
 
+        layers = []
+        layers.append(nn.Linear(input_dim, hidden_width))
+        layers.append(activation())
+        for _ in range(hidden_layers - 1):
+            layers.append(nn.Linear(hidden_width, hidden_width))
+            layers.append(activation())
+        layers.append(nn.Linear(hidden_width, output_dim))
+        self.model = nn.Sequential(*layers)
+
+        for layer in self.model:
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_uniform_(layer.weight)
+                nn.init.zeros_(layer.bias)
+    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Evaluate the network.
 
@@ -40,4 +61,5 @@ class PINN(nn.Module):
             Tensor of shape (N, output_dim).
         """
         # TODO: forward pass through the MLP
-        raise NotImplementedError
+        x_normalized = 2 * (x - self.lower_bound) / (self.upper_bound - self.lower_bound) - 1.0
+        return self.model(x_normalized)

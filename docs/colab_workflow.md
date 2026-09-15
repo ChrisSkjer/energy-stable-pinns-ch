@@ -24,8 +24,12 @@ reference solutions.
 3. **Train**, e.g.:
 
    ```python
-   !python src/pinn/train.py --device cuda --epochs 20000 --checkpoint-every 500
+   !python -m src.pinn.train --device cuda --epochs 20000 --checkpoint-every 500
    ```
+
+   (`-m src.pinn.train`, not `python src/pinn/train.py` — the script imports
+   `src.pinn.losses` etc. as a package, which only resolves when run with
+   `-m` from the repo root.)
 
    Add `--energy-penalty` to train the enhanced model instead of the baseline.
 
