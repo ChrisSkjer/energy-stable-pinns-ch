@@ -8,11 +8,14 @@ docs/colab_workflow.md.
 from __future__ import annotations
 
 import argparse
+import datetime
+import os
 
 import torch
 
 from src.pinn.losses import DEFAULT_EPSILON, energy_stability_loss, ic_bc_loss, pde_residual_loss
 from src.pinn.model import PINN
+from src.pinn.run_paths import checkpoints_dir_for, final_path_for, run_dir_for
 from src.pinn.sampling import TrainingPoints, sample_points
 
 
@@ -56,12 +59,24 @@ def parse_args() -> argparse.Namespace:
         help="'cpu' locally, 'cuda' on Colab.",
     )
     parser.add_argument("--checkpoint-every", type=int, default=500, help="Epochs between checkpoints")
-    parser.add_argument("--checkpoint-path", type=str, default="checkpoint.pt")
+    parser.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Unique name for this run's output folder, "
+        "results/pinn_models/<run-name>/. Defaults to a timestamp.",
+    )
     parser.add_argument("--smoke-test", action="store_true", help="Run a handful of iterations only")
     return parser.parse_args()
 
 
 def train(args: argparse.Namespace) -> None:
+    run_name = args.run_name or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    checkpoints_dir = checkpoints_dir_for(run_name)
+    final_path = final_path_for(run_name)
+    os.makedirs(checkpoints_dir, exist_ok=True)
+    print(f"run directory: {run_dir_for(run_name)}")
+
     device = torch.device(args.device)
     lower = (0.0, 0.0, 0.0)
     upper = (args.x_max, args.y_max, args.t_max)
@@ -107,7 +122,8 @@ def train(args: argparse.Namespace) -> None:
         optimizer.step()
         history.append(loss.item())
         if epoch % args.checkpoint_every == 0:
-            save_checkpoint(model, args.checkpoint_path, args, history)
+            checkpoint_path = os.path.join(checkpoints_dir, f"checkpoint_step{len(history):06d}.pt")
+            save_checkpoint(model, checkpoint_path, args, history)
 
     lbfgs_steps = 2 if args.smoke_test else args.lbfgs_steps
     lbfgs = torch.optim.LBFGS(model.parameters(), lr=1.0, max_iter=20)
@@ -122,9 +138,11 @@ def train(args: argparse.Namespace) -> None:
     for lbfgs_step in range(lbfgs_steps):
         lbfgs.step(closure)
         if lbfgs_step % args.checkpoint_every == 0:
-            save_checkpoint(model, args.checkpoint_path, args, history)
+            checkpoint_path = os.path.join(checkpoints_dir, f"checkpoint_step{len(history):06d}.pt")
+            save_checkpoint(model, checkpoint_path, args, history)
 
-    save_checkpoint(model, args.checkpoint_path, args, history)
+    save_checkpoint(model, final_path, args, history)
+    print(f"final model: {final_path}")
 
 
 def save_checkpoint(

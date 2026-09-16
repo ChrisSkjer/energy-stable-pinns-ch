@@ -5,10 +5,13 @@ its own, only orchestrates src/pinn/evaluate.py's saved .npz field arrays and
 src/pinn/train.py's checkpointed loss history through src/common/plotting.py,
 then writes PNGs to disk. Run as a module from the repo root:
 
-    python -m src.pinn.plot_results --evaluation evaluation.npz --checkpoint checkpoint.pt --output-dir results/my_run
+    python -m src.pinn.plot_results --evaluation evaluation.npz --checkpoint checkpoint.pt
 
 Either --evaluation or --checkpoint alone is fine (each produces its own
 plots independently); pass both to get everything from one run in one place.
+--output-dir defaults to a plots/ subfolder next to whichever of those two
+paths it's given (see run_paths.infer_run_dir), so plots land alongside the
+checkpoint and evaluation they came from without saying so explicitly.
 
 Only the u (phase) field is plotted, via plotting.plot_field -- that
 function's colormap is fixed to [-1, 1], which fits u but not mu (chemical
@@ -30,6 +33,7 @@ import numpy as np
 import torch
 
 from src.common.plotting import plot_field, plot_loss_history
+from src.pinn.run_paths import infer_run_dir
 
 
 def parse_args() -> argparse.Namespace:
@@ -51,12 +55,23 @@ def parse_args() -> argparse.Namespace:
         "Produces a training-loss-vs-step plot from its bundled history.",
     )
     parser.add_argument(
-        "--output-dir", type=str, default="results/plots", help="Directory to save PNGs into"
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Directory to save PNGs into. Defaults to a plots/ subfolder inside "
+        "the evaluation's (or else the checkpoint's) own run folder "
+        "(results/pinn_models/<run-name>/).",
     )
     parser.add_argument("--dpi", type=int, default=150)
     args = parser.parse_args()
     if args.evaluation is None and args.checkpoint is None:
         parser.error("pass at least one of --evaluation or --checkpoint")
+    if args.output_dir is None:
+        if args.evaluation is not None:
+            run_dir = os.path.dirname(os.path.abspath(args.evaluation))
+        else:
+            run_dir = infer_run_dir(args.checkpoint)
+        args.output_dir = os.path.join(run_dir, "plots")
     return args
 
 

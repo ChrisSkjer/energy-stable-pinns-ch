@@ -203,7 +203,7 @@ importable as a package — i.e. invoked with `-m` from the **repo root**, not
 `python src/pinn/train.py`:
 
 ```powershell
-.venv\Scripts\python.exe -m src.pinn.train --smoke-test --checkpoint-path checkpoint_smoke.pt
+.venv\Scripts\python.exe -m src.pinn.train --smoke-test --run-name demo_run
 ```
 
 **`--smoke-test`** is the fast local sanity check: it shrinks the point
@@ -228,43 +228,62 @@ domain bounds (`--x-max`/`--y-max`/`--t-max`), point counts
 (`--hidden-layers`/`--hidden-width`), and optimizer settings
 (`--lr`, `--lbfgs-steps`).
 
-**Output:** a `.pt` checkpoint at `--checkpoint-path` (default
-`checkpoint.pt` in the working directory) holding the model's
-`state_dict()`, the CLI `args` it was trained with, and the loss `history`,
-written every `--checkpoint-every` epochs and once more at the end — no
-other files or logs are produced. See the next section for turning that
-checkpoint into field/loss plots.
+**Output — one folder per run.** `train.py` writes everything under
+`results/pinn_models/<run-name>/` (`--run-name`, default: a
+`YYYYMMDD_HHMMSS` timestamp if you don't pass one):
+
+```
+results/pinn_models/<run-name>/
+├── checkpoints/
+│   ├── checkpoint_step000500.pt   # one per --checkpoint-every optimizer steps
+│   └── checkpoint_step001000.pt
+└── final.pt                       # weights once the full run finishes
+```
+
+Every `.pt` file (periodic or final) holds the model's `state_dict()`, the
+CLI `args` it was trained with, and the loss `history` so far — see
+`src/pinn/run_paths.py` for the exact layout, and the next section for
+turning a checkpoint into field/loss plots. The run folder is printed to
+stdout at the start of training (`run directory: ...`) so you don't have to
+compute it yourself.
 
 ## Evaluating and plotting a trained checkpoint
 
 Two more thin CLI scripts, run the same way as `train.py` above (`-m`, from
-the repo root, same `.venv`).
+the repo root, same `.venv`). Both default their output into the *same* run
+folder as whichever checkpoint you point them at (via
+`src/pinn/run_paths.py::infer_run_dir`), so a checkpoint, its evaluation, and
+its plots stay findable together without retyping the run name each time.
 
-**1. Evaluate** — `src/pinn/evaluate.py` loads a checkpoint and evaluates it
-on a grid at one or more times, saving plain numpy arrays (no plotting here,
-and nothing downstream needs torch):
+**1. Evaluate** — `src/pinn/evaluate.py` loads a checkpoint (`final.pt`, or
+any file under `checkpoints/`) and evaluates it on a grid at one or more
+times, saving plain numpy arrays (no plotting here, and nothing downstream
+needs torch):
 
 ```powershell
-.venv\Scripts\python.exe -m src.pinn.evaluate --checkpoint-path checkpoint.pt --t 0.0 0.001 0.005 --output evaluation.npz
+.venv\Scripts\python.exe -m src.pinn.evaluate --checkpoint-path results/pinn_models/demo_run/final.pt --t 0.0 0.001 0.005
 ```
 
 Architecture and domain bounds are read back out of the checkpoint itself
 (bundled there by `train.py`'s `save_checkpoint`), so only
 evaluation-specific flags are needed: `--nx`/`--ny` (grid resolution), `--t`
-(one or more snapshot times), `--device`, `--output` (`.npz` path, default
-`evaluation.npz`). **Output:** an `.npz` with `x`, `y` (each `(nx, ny)`),
-`t`, and `u`, `mu` (each `(len(t), nx, ny)`).
+(one or more snapshot times), `--device`, `--output` (`.npz` path — defaults
+to `evaluation.npz` inside that checkpoint's run folder, override to place it
+elsewhere). **Output:** `results/pinn_models/demo_run/evaluation.npz`
+holding `x`, `y` (each `(nx, ny)`), `t`, and `u`, `mu` (each
+`(len(t), nx, ny)`).
 
 **2. Plot** — `src/pinn/plot_results.py` turns that `.npz`, and/or a
 checkpoint's loss history, into saved PNGs:
 
 ```powershell
-.venv\Scripts\python.exe -m src.pinn.plot_results --evaluation evaluation.npz --checkpoint checkpoint.pt --output-dir results/my_run
+.venv\Scripts\python.exe -m src.pinn.plot_results --evaluation results/pinn_models/demo_run/evaluation.npz --checkpoint results/pinn_models/demo_run/final.pt
 ```
 
 `--evaluation` and `--checkpoint` are each optional, but at least one is
 required — pass both to get everything from one run into one place.
-**Output**, written under `--output-dir` (default `results/plots`; each
+**Output**, written under `--output-dir` (defaults to a `plots/` subfolder
+in that same run folder, e.g. `results/pinn_models/demo_run/plots/`; each
 saved path is also printed to stdout):
 
 - `field_u_<idx>_t<value>.png` — one per saved time, the u (phase) field via
