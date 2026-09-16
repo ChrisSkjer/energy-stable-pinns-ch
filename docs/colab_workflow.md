@@ -24,7 +24,7 @@ reference solutions.
 3. **Train**, e.g.:
 
    ```python
-   !python -m src.pinn.train --device cuda --epochs 20000 --checkpoint-every 500
+   !python -m src.pinn.train --run-name eps0.01_h64x4 --device cuda --epochs 20000 --checkpoint-every 500
    ```
 
    (`-m src.pinn.train`, not `python src/pinn/train.py` — the script imports
@@ -33,12 +33,17 @@ reference solutions.
 
    Add `--energy-penalty` to train the enhanced model instead of the baseline.
 
-4. **Retrieve the checkpoint.** Training periodically writes a `.pt` weights
-   file (Colab sessions can disconnect, so don't wait for the final epoch).
-   Download it back to the local machine via:
-   - the Colab file browser (right-click → Download), or
-   - pushing it to Google Drive (`!cp checkpoint.pt /content/drive/MyDrive/...`)
-     after mounting Drive.
+   Everything gets written under `results/pinn_models/<run-name>/`: periodic
+   snapshots in `checkpoints/checkpoint_step<N>.pt` and the finished weights
+   at `final.pt` (see `src/pinn/run_paths.py`).
+
+4. **Retrieve the checkpoint** (Colab sessions can disconnect, so don't wait
+   for `final.pt` — a periodic one under `checkpoints/` works with
+   `evaluate.py` too). Download the run folder back to the local machine via:
+   - the Colab file browser (right-click the `results/pinn_models/<run-name>/`
+     folder → Download), or
+   - pushing it to Google Drive (`!cp -r results/pinn_models/<run-name>
+     /content/drive/MyDrive/...`) after mounting Drive.
 
 5. **Run comparisons locally.** Once the `.pt` weights are back on the local
    machine, use `src/common/metrics.py` together with a FEM reference

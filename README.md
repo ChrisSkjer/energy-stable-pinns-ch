@@ -23,27 +23,36 @@ FEniCSx (DOLFINx).
 ```
 .
 ├── src/
-│   ├── pinn/       # PINN model, loss functions, training loop
+│   ├── pinn/       # model, sampling, losses, train/evaluate/plot CLI scripts
 │   ├── fem/        # DOLFINx Cahn-Hilliard solver (ground-truth baseline)
 │   └── common/     # shared utils: metrics (relative L2, energy, mass), plotting
 ├── data/           # generated FEM reference solutions (gitignored, local only)
 ├── notebooks/      # exploration notebooks
-├── results/        # figures, logs, benchmark tables (gitignored)
+├── results/        # figures, logs, benchmark tables; results/pinn_models/<run>/
+│                   # holds each training run's checkpoints + evaluation + plots
+│                   # (all gitignored)
 ├── docs/           # thesis notes, literature extraction, workflow notes
 ├── tests/          # unit tests
-├── environment.yml           # local (WSL2/conda) environment
-├── requirements-colab.txt    # Colab (GPU) environment
+├── environment.yml           # WSL2/conda environment (FEM + PINN authoring)
+├── requirements-colab.txt    # Colab (GPU) environment (PINN training only)
 ```
 
 This is a two-machine project:
 
-- **Local (WSL2/conda, no GPU)** runs the FEM baseline (DOLFINx) and is used
-  to author/smoke-test PINN code on CPU.
-- **Google Colab (GPU)** runs the actual PINN training. Colab never touches
-  FEM code or data — training is physics-only (PDE residual, IC/BC, and the
-  energy penalty are computed from the network's own predictions).
+- **Local (no GPU)** runs the FEM baseline (DOLFINx, WSL2/conda only) and is
+  used to author/smoke-test/evaluate/plot PINN code on CPU (plain Windows
+  `.venv`, no WSL needed).
+- **Google Colab (GPU)** runs the actual, full-length PINN training. Colab
+  never touches FEM code or data — training is physics-only (PDE residual,
+  IC/BC, and the energy penalty are computed from the network's own
+  predictions).
 
-## Local environment setup
+## Local setup
+
+Two independent environments, depending on what you're running — most work
+only needs the second one.
+
+### 1. FEM baseline (`src/fem/`) — WSL2 + conda, DOLFINx
 
 DOLFINx does not run natively on Windows, only on Linux — so `conda
 activate fenicsx-env` only works **inside a WSL2 shell**, never in a plain
@@ -79,19 +88,38 @@ environment.yml` instead.)
 python -c "import dolfinx; print(dolfinx.__version__)"
 ```
 
-If that prints a version number, you're set up correctly and can run FEM
-commands as below. If it errors, the conda env doesn't have DOLFINx —
-re-check Step 2, not the WSL step.
+If that prints a version number, you're set up correctly. If it errors, the
+conda env doesn't have DOLFINx — re-check Step 2, not the WSL step.
 
 **Note:** DOLFINx must be installed from `conda-forge`, not `pip`. Also note
 that legacy FEniCS (the old `dolfin` package) tutorials and APIs are **not**
 compatible with DOLFINx (`dolfinx`) — they are different projects despite the
 similar name. Only follow DOLFINx-specific documentation.
 
+### 2. PINN code (`src/pinn/`, `src/common/`, `tests/`) — plain Windows venv, no WSL
+
+Everything else in this repo — the PINN model/training/evaluation/plotting
+code, the shared plotting/metrics utilities, the unit tests, and the demo
+notebook — needs only CPU `torch`, `numpy`, and `matplotlib`, so it runs in
+a plain Windows Python venv. One-time setup:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install torch matplotlib numpy ipykernel pytest --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+```
+
+(`.venv/` is gitignored.) For notebooks, open one in VS Code and pick
+`.venv` in the kernel selector, top right — or `Ctrl+Shift+P` → "Python:
+Select Interpreter" → `.venv` to make it this workspace's default.
+
+Every `python ...` command below assumes this venv is active and that
+you're in the **repo root** — either activate it
+(`.venv\Scripts\Activate.ps1`, then use plain `python`) or spell out
+`.venv\Scripts\python.exe` each time, as the examples do.
+
 ## Running the FEM baseline
 
-Requires an activated `fenicsx-env` inside WSL2 (see setup above — you
-should see `(fenicsx-env)` in your prompt before running this):
+Requires the WSL2/conda setup above (`(fenicsx-env)` in your prompt):
 
 ```bash
 python src/fem/cahn_hilliard.py --output-dir results/my_run
@@ -133,19 +161,16 @@ the tag can point at each other later.
   (run from inside the `frames/` folder; `ffmpeg` isn't in `environment.yml`
   yet — `conda install -n fenicsx-env -c conda-forge ffmpeg` if you want it.)
 
-## Quick PINN demo (no setup — run it in Colab)
+## Quick PINN demo (no thesis code — a sandbox notebook)
 
 [notebooks/pinn_demo.ipynb](notebooks/pinn_demo.ipynb) is a small
 self-contained PINN for getting a feel for how one trains and what it
-produces. It is a sandbox, not thesis code: it imports nothing from `src/`,
-uses only the standard loss terms (PDE residual + IC + BC), and has no energy
-penalty or transfer learning. The last cell maps its pieces back onto the real
-modules.
+produces. It imports nothing from `src/`, uses only the standard loss terms
+(PDE residual + IC + BC), and has no energy penalty or transfer learning.
+The last cell maps its pieces back onto the real modules.
 
-**Easiest way to run it: Colab.** The notebook imports only `math`, `time`,
-`torch`, and `matplotlib` — all of which Colab's default runtime already has,
-so there is nothing to clone, install, or `pip` first. Just open it and hit
-run:
+**Requirements:** none beyond `torch` + `matplotlib` — either the venv from
+Local setup above, or Colab, which already has both preinstalled:
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ChrisSkjer/energy-stable-pinns-ch/blob/main/notebooks/pinn_demo.ipynb)
 
@@ -153,24 +178,9 @@ run:
 
 That link opens whatever is on `main` in GitHub, so push before you expect a
 change to show up there, and use *File → Save a copy in Drive* if you want to
-keep your edits. Two Colab-only notes: the CPU runtime is enough (it is a
-1D toy problem — GPU is optional, and if you do pick one, set
-`device = torch.device("cuda")` in the setup cell), and the `../results/...`
-save path in the last section does not exist there, so figures live only in
-the session unless you save them to Drive.
-
-**Alternative: locally on Windows, no WSL.** It needs only `torch` (CPU),
-`matplotlib`, and `ipykernel`, so plain Windows Python works — no WSL, no
-DOLFINx. One-time setup:
-
-```powershell
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install torch matplotlib ipykernel --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
-```
-
-(`.venv/` is gitignored.) Then open the notebook in VS Code and pick `.venv`
-in the kernel selector, top right — or `Ctrl+Shift+P` → "Python: Select
-Interpreter" → `.venv` to make it this workspace's default.
+keep your edits. On Colab, the CPU runtime is enough (it's a 1D toy
+problem), and the `../results/...` save path in the last cell doesn't exist
+there, so figures live only in the session unless you save them to Drive.
 
 Either way, the notebook runs top to bottom in about two minutes on a laptop
 CPU:
@@ -192,10 +202,8 @@ Figures render inline; save any you want to keep under `results/`.
 This is the real thesis training code — `src/pinn/model.py` (network),
 `src/pinn/losses.py` (PDE/IC/BC/energy loss terms), and
 `src/pinn/sampling.py` (domain point sampling) — as opposed to the
-self-contained demo notebook above.
-
-**Setup:** the same `.venv` as the demo notebook works (see "Alternative:
-locally on Windows, no WSL" above) — it only needs `torch`.
+self-contained demo notebook above. **Requirements:** the venv from Local
+setup above — only `torch` is actually exercised by this script.
 
 **Run it as a module, not as a script.** `train.py` does
 `from src.pinn.losses import ...`, which only resolves when `src` is
@@ -214,10 +222,10 @@ a couple of seconds on CPU. It proves the code path works end to end; it
 says nothing about training quality, so don't read anything into the loss
 value it produces.
 
-**A real run** (typically on Colab GPU — see below), e.g.:
+**A real run** (on Colab GPU — see below), e.g.:
 
 ```bash
-python -m src.pinn.train --device cuda --epochs 20000 --checkpoint-every 500
+python -m src.pinn.train --run-name eps0.01_h64x4 --device cuda --epochs 20000 --checkpoint-every 500
 ```
 
 Add `--energy-penalty --energy-weight <w>` to train the enhanced model
@@ -229,8 +237,10 @@ domain bounds (`--x-max`/`--y-max`/`--t-max`), point counts
 (`--lr`, `--lbfgs-steps`).
 
 **Output — one folder per run.** `train.py` writes everything under
-`results/pinn_models/<run-name>/` (`--run-name`, default: a
-`YYYYMMDD_HHMMSS` timestamp if you don't pass one):
+`results/pinn_models/<run-name>/` (`--run-name`; defaults to a
+`YYYYMMDD_HHMMSS` timestamp if you don't pass one — always pass a
+descriptive one for a run you intend to keep, same reasoning as the FEM
+naming convention above):
 
 ```
 results/pinn_models/<run-name>/
@@ -250,7 +260,7 @@ compute it yourself.
 ## Evaluating and plotting a trained checkpoint
 
 Two more thin CLI scripts, run the same way as `train.py` above (`-m`, from
-the repo root, same `.venv`). Both default their output into the *same* run
+the repo root, same venv). Both default their output into the *same* run
 folder as whichever checkpoint you point them at (via
 `src/pinn/run_paths.py::infer_run_dir`), so a checkpoint, its evaluation, and
 its plots stay findable together without retyping the run name each time.
@@ -267,11 +277,12 @@ needs torch):
 Architecture and domain bounds are read back out of the checkpoint itself
 (bundled there by `train.py`'s `save_checkpoint`), so only
 evaluation-specific flags are needed: `--nx`/`--ny` (grid resolution), `--t`
-(one or more snapshot times), `--device`, `--output` (`.npz` path — defaults
-to `evaluation.npz` inside that checkpoint's run folder, override to place it
-elsewhere). **Output:** `results/pinn_models/demo_run/evaluation.npz`
-holding `x`, `y` (each `(nx, ny)`), `t`, and `u`, `mu` (each
-`(len(t), nx, ny)`).
+(one or more snapshot times — must lie within `[0, t_max]` from training,
+since the network was never trained past that), `--device`, `--output`
+(`.npz` path — defaults to `evaluation.npz` inside that checkpoint's run
+folder, override to place it elsewhere). **Output:**
+`results/pinn_models/demo_run/evaluation.npz` holding `x`, `y` (each
+`(nx, ny)`), `t`, and `u`, `mu` (each `(len(t), nx, ny)`).
 
 **2. Plot** — `src/pinn/plot_results.py` turns that `.npz`, and/or a
 checkpoint's loss history, into saved PNGs:
@@ -299,14 +310,30 @@ still stubs (see Status). [notebooks/pinn_CH_imp1.ipynb](notebooks/pinn_CH_imp1.
 has working versions of those checks (`plot_ch_frames`, `ch_diagnostics`,
 `phase_stats`) to use as a reference until they're ported into `src/`.
 
+## Running tests
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/
+```
+
+From the repo root, same venv as above (`pytest` is included in the Local
+setup pip install command). `tests/test_fem_cahn_hilliard.py` needs DOLFINx
+and self-skips (via `pytest.importorskip`) when it isn't importable — so the
+full suite runs clean in the plain Windows venv, with that one test reported
+as skipped rather than failed. Run it for real from inside WSL's
+`fenicsx-env` (which already includes `pytest`, see `environment.yml`) if
+you need that test to actually execute.
+
 ## Training on Colab
 
 1. Clone the repo in a Colab cell and `pip install -r requirements-colab.txt`
    (no FEM data needed there).
 2. Train the PINN (baseline or enhanced, via `--energy-penalty`) using the
-   `-m src.pinn.train` invocation above, with `--device cuda`.
-3. Download the resulting checkpointed `.pt` weights back to the local
-   machine to run inference and comparison against the local FEM output.
+   `-m src.pinn.train` invocation above, with `--device cuda` and a
+   descriptive `--run-name`.
+3. Download the resulting `results/pinn_models/<run-name>/` folder back to
+   the local machine (at minimum `final.pt`) to run evaluation/plotting and
+   comparison against the local FEM output.
 
 See [docs/colab_workflow.md](docs/colab_workflow.md) for the full walkthrough.
 
