@@ -107,7 +107,7 @@ def train(args: argparse.Namespace) -> None:
         optimizer.step()
         history.append(loss.item())
         if epoch % args.checkpoint_every == 0:
-            save_checkpoint(model, args.checkpoint_path)
+            save_checkpoint(model, args.checkpoint_path, args, history)
 
     lbfgs_steps = 2 if args.smoke_test else args.lbfgs_steps
     lbfgs = torch.optim.LBFGS(model.parameters(), lr=1.0, max_iter=20)
@@ -116,19 +116,29 @@ def train(args: argparse.Namespace) -> None:
         lbfgs.zero_grad()
         loss = compute_loss(points)
         loss.backward()
+        history.append(loss.item())
         return loss
 
     for lbfgs_step in range(lbfgs_steps):
         lbfgs.step(closure)
         if lbfgs_step % args.checkpoint_every == 0:
-            save_checkpoint(model, args.checkpoint_path)
+            save_checkpoint(model, args.checkpoint_path, args, history)
 
-    save_checkpoint(model, args.checkpoint_path)
+    save_checkpoint(model, args.checkpoint_path, args, history)
 
 
-def save_checkpoint(model: torch.nn.Module, path: str) -> None:
-    """Save model weights to `path`."""
-    torch.save(model.state_dict(), path)
+def save_checkpoint(
+    model: torch.nn.Module, path: str, args: argparse.Namespace, history: list[float]
+) -> None:
+    """Save model weights plus the metadata needed to reload them.
+
+    Bundling `args` (the exact CLI flags this run used) and `history` (loss
+    per optimizer step) alongside the weights means evaluate.py can
+    reconstruct the right architecture and domain bounds on its own instead
+    of having them re-supplied by hand -- and the loss curve survives past
+    the training process instead of being discarded when it exits.
+    """
+    torch.save({"model_state": model.state_dict(), "args": vars(args), "history": history}, path)
 
 
 if __name__ == "__main__":

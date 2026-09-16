@@ -48,6 +48,36 @@ reference solutions.
 The `.pt` checkpoint is the only artifact that needs to travel between the
 two machines.
 
+## Alternative: the official `colab` CLI
+
+Google publishes an official CLI,
+[google-colab-cli](https://github.com/googlecolab/google-colab-cli), that can
+drive this same clone → install → train → retrieve-checkpoint loop from a
+local terminal instead of pasting cells into a notebook:
+
+```bash
+uv tool install google-colab-cli   # or: pip install google-colab-cli
+colab auth                         # one-time OAuth2/ADC setup
+colab run --gpu A100 train_wrapper.py --device cuda --epochs 20000 --checkpoint-every 500
+```
+
+`colab run` provisions a fresh VM, runs a local script with forwarded
+arguments, pulls back output files, and tears the VM down automatically —
+replacing steps 1-4 above in a single command. `colab new` / `colab install
+-r requirements-colab.txt` / `colab exec` / `colab download` / `colab stop`
+are also available for a more manual, step-by-step session.
+
+Not adopted as the primary workflow above yet because:
+- **Linux/macOS only** — there's no native Windows build, so it needs WSL on
+  this machine.
+- `colab run`/`colab exec` run a single local script, whereas
+  `src/pinn/train.py` needs to be invoked as `-m src.pinn.train` (see step 3)
+  for its package-relative imports to resolve. That hasn't been verified to
+  work through this CLI yet.
+
+Worth revisiting if training moves off manual notebook cells and onto a
+scripted loop.
+
 ## Side note: the demo notebook needs none of this
 
 [../notebooks/pinn_demo.ipynb](../notebooks/pinn_demo.ipynb) is self-contained
