@@ -230,10 +230,53 @@ domain bounds (`--x-max`/`--y-max`/`--t-max`), point counts
 
 **Output:** a `.pt` checkpoint at `--checkpoint-path` (default
 `checkpoint.pt` in the working directory) holding the model's
-`state_dict()`, written every `--checkpoint-every` epochs and once more at
-the end — no other files or logs are produced. There is not yet a script
-that loads a checkpoint back and evaluates/plots it (field snapshots,
-energy/mass diagnostics); [notebooks/pinn_CH_imp1.ipynb](notebooks/pinn_CH_imp1.ipynb)
+`state_dict()`, the CLI `args` it was trained with, and the loss `history`,
+written every `--checkpoint-every` epochs and once more at the end — no
+other files or logs are produced. See the next section for turning that
+checkpoint into field/loss plots.
+
+## Evaluating and plotting a trained checkpoint
+
+Two more thin CLI scripts, run the same way as `train.py` above (`-m`, from
+the repo root, same `.venv`).
+
+**1. Evaluate** — `src/pinn/evaluate.py` loads a checkpoint and evaluates it
+on a grid at one or more times, saving plain numpy arrays (no plotting here,
+and nothing downstream needs torch):
+
+```powershell
+.venv\Scripts\python.exe -m src.pinn.evaluate --checkpoint-path checkpoint.pt --t 0.0 0.001 0.005 --output evaluation.npz
+```
+
+Architecture and domain bounds are read back out of the checkpoint itself
+(bundled there by `train.py`'s `save_checkpoint`), so only
+evaluation-specific flags are needed: `--nx`/`--ny` (grid resolution), `--t`
+(one or more snapshot times), `--device`, `--output` (`.npz` path, default
+`evaluation.npz`). **Output:** an `.npz` with `x`, `y` (each `(nx, ny)`),
+`t`, and `u`, `mu` (each `(len(t), nx, ny)`).
+
+**2. Plot** — `src/pinn/plot_results.py` turns that `.npz`, and/or a
+checkpoint's loss history, into saved PNGs:
+
+```powershell
+.venv\Scripts\python.exe -m src.pinn.plot_results --evaluation evaluation.npz --checkpoint checkpoint.pt --output-dir results/my_run
+```
+
+`--evaluation` and `--checkpoint` are each optional, but at least one is
+required — pass both to get everything from one run into one place.
+**Output**, written under `--output-dir` (default `results/plots`; each
+saved path is also printed to stdout):
+
+- `field_u_<idx>_t<value>.png` — one per saved time, the u (phase) field via
+  `src/common/plotting.py::plot_field`.
+- `loss_history.png` — loss vs. optimizer step, from the checkpoint's
+  bundled history (only if `--checkpoint` was passed).
+
+Not produced yet: mu snapshots (`plot_field`'s colormap is fixed to u's
+`[-1, 1]` range, which doesn't fit mu's unbounded scale as-is), PINN-vs-FEM
+comparison plots, and energy/mass-conservation plots — the latter two need
+`src/common/metrics.py`'s `free_energy`/`mass_conservation_error`, which are
+still stubs (see Status). [notebooks/pinn_CH_imp1.ipynb](notebooks/pinn_CH_imp1.ipynb)
 has working versions of those checks (`plot_ch_frames`, `ch_diagnostics`,
 `phase_stats`) to use as a reference until they're ported into `src/`.
 
@@ -255,6 +298,11 @@ end-to-end (mesh, weak form, adaptive time stepping, diagnostics, PNG
 snapshots). `src/pinn/` (model, losses, sampling, training loop) runs
 end-to-end for the baseline PINN — validated so far via
 `notebooks/pinn_CH_imp1.ipynb`, not yet via `src/pinn/train.py` itself on a
-full-length run. The energy-stability penalty (`energy_stability_loss`) and
-an evaluation/plotting script for `src/pinn/train.py` checkpoints are not
-implemented yet.
+full-length run. `src/pinn/evaluate.py` and `src/pinn/plot_results.py` load a
+checkpoint back and produce field/loss plots (see above). Not implemented
+yet: the energy-stability penalty (`energy_stability_loss` — passing
+`--energy-penalty` currently raises `NotImplementedError`), all of
+`src/common/metrics.py` (`relative_l2_error`, `free_energy`,
+`mass_conservation_error`), and PINN-vs-FEM comparison plots (blocked on
+those metrics plus raw FEM field arrays, which `src/fem/cahn_hilliard.py`
+doesn't save yet — only PNG frames and scalar diagnostics).
