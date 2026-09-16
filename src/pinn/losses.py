@@ -9,8 +9,16 @@ from __future__ import annotations
 import torch
 from torch import nn
 
+# Cahn-Hilliard interface half-width. This is the single source of truth for
+# epsilon: `sampling.cross_initial_condition` imports it so the initial
+# profile stays consistent with the PDE residual (a mismatch here puts the
+# IC out of equilibrium and forces the network to resolve a stiff transient
+# at t = 0). Pass `epsilon` explicitly through `train.py` rather than
+# overriding this default in only one of the two places it's used.
+DEFAULT_EPSILON = 0.01
 
-def pde_residual_loss(model: nn.Module, collocation_points: torch.Tensor, epsilon = 0.01, m = 1.0) -> torch.Tensor:
+
+def pde_residual_loss(model: nn.Module, collocation_points: torch.Tensor, epsilon = DEFAULT_EPSILON, m = 1.0) -> torch.Tensor:
     """Residual of the Cahn-Hilliard PDE (mixed c/mu formulation) at
     collocation points, via automatic differentiation.
 

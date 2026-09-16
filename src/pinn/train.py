@@ -11,7 +11,7 @@ import argparse
 
 import torch
 
-from src.pinn.losses import energy_stability_loss, ic_bc_loss, pde_residual_loss
+from src.pinn.losses import DEFAULT_EPSILON, energy_stability_loss, ic_bc_loss, pde_residual_loss
 from src.pinn.model import PINN
 from src.pinn.sampling import TrainingPoints, sample_points
 
@@ -30,6 +30,13 @@ def parse_args() -> argparse.Namespace:
         "Omit for the baseline PINN.",
     )
     parser.add_argument("--energy-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--epsilon",
+        type=float,
+        default=DEFAULT_EPSILON,
+        help="Cahn-Hilliard interface half-width, used for both the PDE "
+        "residual and the initial-condition profile.",
+    )
     parser.add_argument("--x-max", type=float, default=1.0, help="Domain upper bound in x (lower is 0)")
     parser.add_argument("--y-max", type=float, default=1.0, help="Domain upper bound in y (lower is 0)")
     parser.add_argument("--t-max", type=float, default=5e-3, help="Domain upper bound in t (lower is 0)")
@@ -79,10 +86,11 @@ def train(args: argparse.Namespace) -> None:
         n_bc=n_bc,
         device=device,
         pde_at_t0=args.pde_at_t0,
+        epsilon=args.epsilon,
     )
 
     def compute_loss(points: TrainingPoints) -> torch.Tensor:
-        loss = pde_residual_loss(model, points.collocation) + ic_bc_loss(
+        loss = pde_residual_loss(model, points.collocation, epsilon=args.epsilon) + ic_bc_loss(
             model, points.ic_points, points.ic_values, points.bc_points
         )
         if args.energy_penalty:

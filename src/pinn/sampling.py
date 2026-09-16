@@ -12,10 +12,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
-# Interface half-width of the initial profile. Keep this equal to the
-# `epsilon` passed to pde_residual_loss -- a mismatch puts the profile out of
-# equilibrium and forces the network to resolve a stiff transient at t = 0.
-_IC_EPS = 0.01
+from src.pinn.losses import DEFAULT_EPSILON
 
 # "Swiss flag" cross proportions: arms 6 units wide and 20 units long on a
 # 32-unit square, rescaled to the unit square.
@@ -59,13 +56,14 @@ def _cross_sdf(xx: torch.Tensor, yy: torch.Tensor) -> torch.Tensor:
     return torch.minimum(horizontal, vertical)
 
 
-def cross_initial_condition(points: torch.Tensor, eps: float = _IC_EPS) -> torch.Tensor:
+def cross_initial_condition(points: torch.Tensor, eps: float = DEFAULT_EPSILON) -> torch.Tensor:
     """Swiss-flag cross initial condition: u = +1 on the cross, u = -1 on the
     background, joined by the equilibrium tanh interface profile.
 
     Args:
         points: (N, 3) tensor of (x, y, t). Assumes the spatial domain is [0, 1]^2.
-        eps: interface half-width; should match `epsilon` in pde_residual_loss.
+        eps: interface half-width; must match `epsilon` in pde_residual_loss
+            (see `losses.DEFAULT_EPSILON`).
 
     Returns:
         (N, 1) tensor of u values.
@@ -82,6 +80,7 @@ def sample_points(
     n_bc: int,
     device: torch.device | str = "cpu",
     pde_at_t0: int = 0,
+    epsilon: float = DEFAULT_EPSILON,
 ) -> TrainingPoints:
     """Sample collocation, initial-condition, and boundary-condition points.
 
@@ -94,6 +93,9 @@ def sample_points(
         device: device to place the tensors on.
         pde_at_t0: if > 0, also enforce the PDE residual at this many of the
             initial-condition points (helps the residual stay consistent at t=0).
+        epsilon: interface half-width for the IC profile; pass the same value
+            used for `epsilon` in `pde_residual_loss` to keep the IC in
+            equilibrium with the PDE.
 
     Returns:
         A TrainingPoints bundle.
@@ -116,7 +118,7 @@ def sample_points(
         x_pde = torch.cat([x_pde, x_ic[idx]], dim=0)
 
     x_pde = x_pde.requires_grad_(True)
-    ic_values = cross_initial_condition(x_ic)
+    ic_values = cross_initial_condition(x_ic, eps=epsilon)
 
     x_edge = torch.linspace(lower[0], upper[0], n_bc, device=device)
     y_edge = torch.linspace(lower[1], upper[1], n_bc, device=device)

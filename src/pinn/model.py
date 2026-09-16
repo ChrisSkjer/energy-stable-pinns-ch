@@ -60,6 +60,5 @@ class PINN(nn.Module):
         Returns:
             Tensor of shape (N, output_dim).
         """
-        # TODO: forward pass through the MLP
         x_normalized = 2 * (x - self.lower_bound) / (self.upper_bound - self.lower_bound) - 1.0
         return self.model(x_normalized)
