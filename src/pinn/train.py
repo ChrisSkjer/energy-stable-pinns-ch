@@ -34,8 +34,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--energy-weight", type=float, default=1.0)
     parser.add_argument("--pde-weight", type=float, default=1.0, help="Weight on the PDE residual loss term")
-    parser.add_argument("--ic-weight", type=float, default=1.0, help="Weight on the initial-condition loss term")
-    parser.add_argument("--bc-weight", type=float, default=1.0, help="Weight on the boundary-condition loss term")
+    parser.add_argument("--ic-weight", type=float, default=100, help="Weight on the initial-condition loss term")
+    parser.add_argument("--bc-weight", type=float, default=10, help="Weight on the boundary-condition loss term")
     parser.add_argument(
         "--epsilon",
         type=float,

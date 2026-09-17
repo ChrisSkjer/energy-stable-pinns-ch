@@ -259,6 +259,21 @@ compute it yourself.
 
 ## Evaluating and plotting a trained checkpoint
 
+**Quick look at a run** — set `$run` once, paste all three:
+
+```powershell
+$run = "demo_run"  # <- change this to the run-name you want to look at
+
+.venv\Scripts\python.exe -m src.pinn.evaluate --checkpoint-path results/pinn_models/$run/final.pt --t 0.0 0.001 0.005
+.venv\Scripts\python.exe -m src.pinn.diagnostics --checkpoint-path results/pinn_models/$run/final.pt
+.venv\Scripts\python.exe -m src.pinn.plot_results --evaluation results/pinn_models/$run/evaluation.npz --checkpoint results/pinn_models/$run/final.pt
+```
+
+Drops everything into `results/pinn_models/<run-name>/plots/` — see the
+per-script breakdown below for what each one produces and what flags exist
+beyond the defaults used here (e.g. different `--t` snapshots, `--nx`/`--ny`
+resolution, `--fem-diagnostics` to overlay a FEM reference).
+
 Three more thin CLI scripts, run the same way as `train.py` above (`-m`, from
 the repo root, same venv). All three default their output into the *same*
 run folder as whichever checkpoint you point them at (via

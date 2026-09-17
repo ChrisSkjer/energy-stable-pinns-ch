@@ -15,7 +15,7 @@ from torch import nn
 # IC out of equilibrium and forces the network to resolve a stiff transient
 # at t = 0). Pass `epsilon` explicitly through `train.py` rather than
 # overriding this default in only one of the two places it's used.
-DEFAULT_EPSILON = 0.01
+DEFAULT_EPSILON = 0.05
 
 
 def pde_residual_loss(model: nn.Module, collocation_points: torch.Tensor, epsilon = DEFAULT_EPSILON, m = 1.0) -> torch.Tensor:

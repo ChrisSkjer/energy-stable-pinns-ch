@@ -23,13 +23,11 @@ class PINN(nn.Module):
         upper_bound: torch.Tensor,
         input_dim: int = 3,
         output_dim: int = 1,
-        hidden_layers: int = 4,
-        hidden_width: int = 64,
+        hidden_layers: int = 5,
+        hidden_width: int = 100,
         activation: type[nn.Module] = nn.Tanh,
     ) -> None:
         super().__init__()
-        # TODO: build the MLP (input_dim -> [hidden_width] * hidden_layers -> output_dim)
-        # TODO: consider Xavier/Glorot init, common for tanh-activated PINNs
         self.register_buffer("lower_bound", torch.as_tensor(lower_bound, dtype=torch.float32))
         self.register_buffer("upper_bound", torch.as_tensor(upper_bound, dtype=torch.float32))
         self.input_dim = input_dim
