@@ -259,11 +259,12 @@ compute it yourself.
 
 ## Evaluating and plotting a trained checkpoint
 
-Two more thin CLI scripts, run the same way as `train.py` above (`-m`, from
-the repo root, same venv). Both default their output into the *same* run
-folder as whichever checkpoint you point them at (via
-`src/pinn/run_paths.py::infer_run_dir`), so a checkpoint, its evaluation, and
-its plots stay findable together without retyping the run name each time.
+Three more thin CLI scripts, run the same way as `train.py` above (`-m`, from
+the repo root, same venv). All three default their output into the *same*
+run folder as whichever checkpoint you point them at (via
+`src/pinn/run_paths.py::infer_run_dir`), so a checkpoint, its evaluation, its
+diagnostics, and its plots stay findable together without retyping the run
+name each time.
 
 **1. Evaluate** — `src/pinn/evaluate.py` loads a checkpoint (`final.pt`, or
 any file under `checkpoints/`) and evaluates it on a grid at one or more
@@ -284,31 +285,55 @@ folder, override to place it elsewhere). **Output:**
 `results/pinn_models/demo_run/evaluation.npz` holding `x`, `y` (each
 `(nx, ny)`), `t`, and `u`, `mu` (each `(len(t), nx, ny)`).
 
-**2. Plot** — `src/pinn/plot_results.py` turns that `.npz`, and/or a
-checkpoint's loss history, into saved PNGs:
+**2. Diagnostics** — `src/pinn/diagnostics.py` loads a checkpoint and, via an
+autograd pass (needed for the interfacial |∇u|² term — nothing below needs
+this, so it's a separate step from evaluation), computes free energy and
+total mass over time on a dense grid (400×400 by default, 101 time samples —
+takes ~20s on CPU):
+
+```powershell
+.venv\Scripts\python.exe -m src.pinn.diagnostics --checkpoint-path results/pinn_models/demo_run/final.pt
+```
+
+**Output:** `results/pinn_models/demo_run/diagnostics.csv`, with the same
+`t,free_energy,total_mass` columns as a FEM run's
+`cahn_hilliard_diagnostics.csv` (see `src/fem/cahn_hilliard.py`), so both are
+readable by the same `src/common/plotting.py::load_diagnostics`.
+
+**3. Plot** — `src/pinn/plot_results.py` turns the `.npz`, a checkpoint's
+loss history, and/or a diagnostics CSV into saved PNGs (and a text summary):
 
 ```powershell
 .venv\Scripts\python.exe -m src.pinn.plot_results --evaluation results/pinn_models/demo_run/evaluation.npz --checkpoint results/pinn_models/demo_run/final.pt
 ```
 
-`--evaluation` and `--checkpoint` are each optional, but at least one is
-required — pass both to get everything from one run into one place.
-**Output**, written under `--output-dir` (defaults to a `plots/` subfolder
-in that same run folder, e.g. `results/pinn_models/demo_run/plots/`; each
-saved path is also printed to stdout):
+`--evaluation`, `--checkpoint`, `--diagnostics`, and `--fem-diagnostics` are
+each optional, but at least one is required — pass several to get everything
+from one run into one place. If `--diagnostics` is omitted, a
+`diagnostics.csv` inside the inferred run folder is picked up automatically
+when present. **Output**, written under `--output-dir` (defaults to a
+`plots/` subfolder in that same run folder, e.g.
+`results/pinn_models/demo_run/plots/`; each saved path is also printed to
+stdout):
 
-- `field_u_<idx>_t<value>.png` — one per saved time, the u (phase) field via
-  `src/common/plotting.py::plot_field`.
+- `field_u_<idx>_t<value>.png` / `field_mu_<idx>_t<value>.png` — one of each
+  per saved time, via `src/common/plotting.py::plot_field`. The mu snapshots
+  share one symmetric color scale across all times, from a robust quantile
+  of `|mu|` rather than a fixed range (mu is unbounded, unlike u).
 - `loss_history.png` — loss vs. optimizer step, from the checkpoint's
   bundled history (only if `--checkpoint` was passed).
+- `run_summary.txt` — network size, domain, sampling, optimizer, loss
+  weights, trainable parameter count, and each loss term's final value (only
+  if `--checkpoint` was passed) — see
+  `src/pinn/run_summary.py::format_run_summary`.
+- `energy_dissipation.png` / `mass_conservation.png` — free energy and total
+  mass vs. time (only if `--diagnostics` and/or `--fem-diagnostics` was
+  passed or auto-detected); pass both to overlay PINN against a FEM
+  reference (auto-clipped to the PINN's own time window).
 
-Not produced yet: mu snapshots (`plot_field`'s colormap is fixed to u's
-`[-1, 1]` range, which doesn't fit mu's unbounded scale as-is), PINN-vs-FEM
-comparison plots, and energy/mass-conservation plots — the latter two need
-`src/common/metrics.py`'s `free_energy`/`mass_conservation_error`, which are
-still stubs (see Status). [notebooks/pinn_CH_imp1.ipynb](notebooks/pinn_CH_imp1.ipynb)
-has working versions of those checks (`plot_ch_frames`, `ch_diagnostics`,
-`phase_stats`) to use as a reference until they're ported into `src/`.
+Not produced yet: PINN-vs-FEM field comparison plots — blocked on
+`src/fem/cahn_hilliard.py` not saving raw field arrays (only PNG frames and
+the diagnostics CSV).
 
 ## Running tests
 
@@ -344,11 +369,14 @@ end-to-end (mesh, weak form, adaptive time stepping, diagnostics, PNG
 snapshots). `src/pinn/` (model, losses, sampling, training loop) runs
 end-to-end for the baseline PINN — validated so far via
 `notebooks/pinn_CH_imp1.ipynb`, not yet via `src/pinn/train.py` itself on a
-full-length run. `src/pinn/evaluate.py` and `src/pinn/plot_results.py` load a
-checkpoint back and produce field/loss plots (see above). Not implemented
-yet: the energy-stability penalty (`energy_stability_loss` — passing
-`--energy-penalty` currently raises `NotImplementedError`), all of
-`src/common/metrics.py` (`relative_l2_error`, `free_energy`,
-`mass_conservation_error`), and PINN-vs-FEM comparison plots (blocked on
-those metrics plus raw FEM field arrays, which `src/fem/cahn_hilliard.py`
-doesn't save yet — only PNG frames and scalar diagnostics).
+full-length run. `src/pinn/evaluate.py`, `src/pinn/diagnostics.py`, and
+`src/pinn/plot_results.py` load a checkpoint back and produce field/loss/
+energy/mass plots plus a run summary (see above). `src/common/metrics.py`'s
+`free_energy` and `total_mass` (and their shared quadrature,
+`trapezoid_weights_2d`) are implemented and drive `diagnostics.py`; still
+stubs there: `relative_l2_error` and `mass_conservation_error`. Not
+implemented yet: the energy-stability penalty (`energy_stability_loss` —
+passing `--energy-penalty` currently raises `NotImplementedError`), and
+PINN-vs-FEM comparison plots (blocked on raw FEM field arrays, which
+`src/fem/cahn_hilliard.py` doesn't save yet — only PNG frames and scalar
+diagnostics).

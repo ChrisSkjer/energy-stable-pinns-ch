@@ -5,7 +5,9 @@ neither torch (src/pinn) nor dolfinx/pyvista (src/fem) as a dependency.
 Fields come from src/pinn/evaluate.py (via its .npz output) or from a FEM
 run's saved arrays; scalar diagnostics come from a FEM run's
 cahn_hilliard_diagnostics.csv (see src/fem/cahn_hilliard.py's
-_DiagnosticsLogger: columns t, free_energy, total_mass).
+_DiagnosticsLogger) or a PINN run's diagnostics.csv (see
+src/pinn/diagnostics.py) -- both share the same three columns:
+t, free_energy, total_mass.
 """
 
 from __future__ import annotations
@@ -39,14 +41,25 @@ def plot_field(
     c: np.ndarray,
     ax=None,
     title: str | None = None,
+    vmin: float = -1.0,
+    vmax: float = 1.0,
+    cmap=None,
+    colorbar_label: str | None = None,
 ):
-    """Render one snapshot of a phase field (PINN u or FEM c) on a shared colormap.
+    """Render one snapshot of a scalar field (PINN u/mu or FEM c) on a shared colormap.
 
     Args:
         x, y: (nx, ny) meshgrid coordinates.
         c: (nx, ny) field values.
         ax: existing matplotlib axes to draw on, or None to create a new figure.
         title: optional axes title, e.g. "PINN, t=0.10".
+        vmin, vmax: colormap bounds. Default to [-1, 1], which fits the
+            phase field u but not the chemical potential mu (unbounded) --
+            pass an explicit symmetric range for mu, e.g. from a quantile of
+            its magnitude.
+        cmap: matplotlib colormap, or None to use phase_colormap() (the
+            default, intended for a field bounded in [-1, 1]).
+        colorbar_label: optional label for the colorbar, e.g. "mu".
 
     Returns:
         The axes drawn on (so callers can compose subplots).
@@ -54,8 +67,12 @@ def plot_field(
     if ax is None:
         _, ax = plt.subplots()
 
-    mesh = ax.pcolormesh(x, y, c, cmap=phase_colormap(), vmin=-1, vmax=1, shading="auto")
-    ax.figure.colorbar(mesh, ax=ax)
+    mesh = ax.pcolormesh(
+        x, y, c, cmap=(phase_colormap() if cmap is None else cmap), vmin=vmin, vmax=vmax, shading="auto"
+    )
+    cbar = ax.figure.colorbar(mesh, ax=ax)
+    if colorbar_label is not None:
+        cbar.set_label(colorbar_label)
     ax.set_aspect("equal")
     ax.set_xlabel("x")
     ax.set_ylabel("y")
@@ -111,52 +128,62 @@ def plot_comparison(
     return fig, (ax_pinn, ax_fem, ax_diff)
 
 
-def plot_loss_history(history: list[float], ax=None):
-    """Plot a PINN training loss curve (log scale) vs. optimizer step.
+def plot_loss_history(history: dict[str, list[float]], ax=None):
+    """Plot per-term PINN training loss curves (log scale) vs. optimizer step.
 
     Args:
-        history: sequence of per-step loss values, e.g. the "history" list
-            bundled into a checkpoint by src/pinn/train.py::save_checkpoint
-            (read via torch.load(checkpoint_path)["history"]). Adam and
-            L-BFGS steps are appended to the same flat list, so there's no
-            marker here for where L-BFGS refinement takes over -- if that
-            boundary matters, the caller can pass it in separately (e.g. as
-            an args.epochs value from the same checkpoint) and draw an
-            axvline.
+        history: dict of per-component loss histories, e.g. the "history"
+            dict bundled into a checkpoint by
+            src/pinn/train.py::save_checkpoint (read via
+            torch.load(checkpoint_path)["history"]). Keys are "pde", "ic",
+            "bc", "total", and "energy" when --energy-penalty was enabled
+            for that run; each component's values already include its
+            --*-weight multiplier, i.e. these are the same numbers
+            train.py prints during training, not the raw unweighted terms.
+            Adam and L-BFGS steps are appended to the same flat lists, so
+            there's no marker here for where L-BFGS refinement takes over.
         ax: existing matplotlib axes to draw on, or None to create a new figure.
 
     Returns:
-        The axes drawn on.
+        The axes the loss curves were drawn on.
 
-    TODO: notebooks/pinn_CH_imp1.ipynb's plot_loss() takes a dict of
-    per-component histories ({'total': [...], 'pde': [...], 'ic': [...],
-    'bc': [...]}) instead of one flat list -- train.py's compute_loss sums
-    the components before logging, so there's nothing to unpack yet. Revisit
-    if train.py starts recording components separately.
+    For the run's settings (network size, domain, loss weights, etc.), see
+    src/pinn/run_summary.py::format_run_summary -- written to a separate
+    run_summary.txt file rather than onto this plot.
     """
     if ax is None:
         _, ax = plt.subplots()
 
-    ax.semilogy(history)
+    for name in ("pde", "ic", "bc", "energy"):
+        if name in history:
+            ax.semilogy(history[name], lw=1.5, alpha=0.8, label=name)
+    if "total" in history:
+        ax.semilogy(history["total"], lw=2.5, color="black", label="total")
+
     ax.set_xlabel("optimizer step")
-    ax.set_ylabel("loss")
+    ax.set_ylabel("weighted loss")
     ax.set_title("Training loss")
     ax.grid(True, which="both", alpha=0.3)
+    ax.legend()
     return ax
 
 
-def load_fem_diagnostics(csv_path: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Load a FEM run's (t, free_energy, total_mass) log.
+def load_diagnostics(csv_path: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Load a (t, free_energy, total_mass) diagnostics log.
 
     Args:
         csv_path: path to a cahn_hilliard_diagnostics.csv written by
-            src/fem/cahn_hilliard.py's _DiagnosticsLogger.
+            src/fem/cahn_hilliard.py's _DiagnosticsLogger, or a
+            diagnostics.csv written by src/pinn/diagnostics.py -- same
+            three-column format.
 
     Returns:
-        (t, free_energy, total_mass) arrays.
+        (t, free_energy, total_mass) arrays, each at least 1-D (a
+        single-row file would otherwise come back as 0-d scalars, which
+        breaks plot_mass_conservation's mass[0] indexing).
     """
     t, energy, mass = np.loadtxt(csv_path, delimiter=",", skiprows=1, unpack=True)
-    return t, energy, mass
+    return np.atleast_1d(t), np.atleast_1d(energy), np.atleast_1d(mass)
 
 
 def plot_energy_dissipation(
@@ -178,9 +205,9 @@ def plot_energy_dissipation(
     t_fem/energy_fem for the reverse. Passing both overlays them for
     comparison, as before. At least one pair is required.
 
-    energy_pinn: needs computing from the PINN's own u, mu output --
-    metrics.free_energy (currently also a stub) is presumably the source
-    for this once implemented.
+    energy_pinn: computed from the PINN's own u output via
+    src/pinn/diagnostics.py (metrics.free_energy under the hood), typically
+    read back from a run's diagnostics.csv via load_diagnostics.
     """
     if t_pinn is None and t_fem is None:
         raise ValueError(

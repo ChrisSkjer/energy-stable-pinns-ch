@@ -6,11 +6,12 @@ train.py creates, per run:
         checkpoints/checkpoint_step<N>.pt   (periodic, one per --checkpoint-every)
         final.pt                            (weights once the full run finishes)
 
-evaluate.py and plot_results.py default their own outputs (evaluation.npz,
-plots/) into that same folder by walking back up from whichever checkpoint
-file they were pointed at, via infer_run_dir -- so a checkpoint, its
-evaluation, and its plots end up findable in one place without retyping the
-run name in three separate flags.
+evaluate.py, diagnostics.py, and plot_results.py default their own outputs
+(evaluation.npz, diagnostics.csv, plots/run_summary.txt, plots/*.png) into
+that same folder by walking back up from whichever checkpoint file they were
+pointed at, via infer_run_dir -- so a checkpoint, its evaluation, its
+diagnostics, and its plots end up findable in one place without retyping the
+run name in four separate flags.
 """
 
 from __future__ import annotations

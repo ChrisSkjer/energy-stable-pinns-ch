@@ -53,27 +53,36 @@ def pde_residual_loss(model: nn.Module, collocation_points: torch.Tensor, epsilo
     return loss_pde
 
 
-def ic_bc_loss(
+def ic_loss(
     model: nn.Module,
     ic_points: torch.Tensor,
     ic_values: torch.Tensor,
-    bc_points: torch.Tensor,
 ) -> torch.Tensor:
-    """Initial-condition and boundary-condition loss.
+    """Initial-condition loss.
 
     Args:
         model: the PINN.
         ic_points: (N_ic, input_dim) points at t=0.
         ic_values: (N_ic, output_dim) target values at ic_points.
+
+    Returns:
+        Scalar MSE of the IC term.
+    """
+    out_ic = model(ic_points)
+    return torch.mean((out_ic - ic_values) ** 2)
+
+
+def bc_loss(model: nn.Module, bc_points: torch.Tensor) -> torch.Tensor:
+    """Boundary-condition loss.
+
+    Args:
+        model: the PINN.
         bc_points: (N_bc, input_dim) points on the domain boundary
             (e.g. for periodic or no-flux/Neumann conditions).
 
     Returns:
-        Scalar combined IC + BC loss.
+        Scalar MSE of the BC term.
     """
-    out_ic = model(ic_points)
-    loss_ic = torch.mean((out_ic - ic_values) ** 2)
-
     out_bc = model(bc_points)
     u_bc, mu_bc = out_bc[:,0:1], out_bc[:,1:2]
     grad_u_bc = torch.autograd.grad(u_bc, bc_points, grad_outputs=torch.ones_like(u_bc), create_graph=True)[0]
@@ -94,10 +103,7 @@ def ic_bc_loss(
         grad_mu_bc[3*n_edge:, 1 :2],  # top edge (y=1)
     ], dim=0)
 
-    loss_bc = torch.mean(du_dn**2) + torch.mean(dmu_dn**2)
-    loss_ic_bc = loss_ic + loss_bc
-   
-    return loss_ic_bc
+    return torch.mean(du_dn**2) + torch.mean(dmu_dn**2)
 
 
 def energy_stability_loss(model: nn.Module, collocation_points: torch.Tensor) -> torch.Tensor:

@@ -46,9 +46,12 @@ reference solutions.
      /content/drive/MyDrive/...`) after mounting Drive.
 
 5. **Run comparisons locally.** Once the `.pt` weights are back on the local
-   machine, use `src/common/metrics.py` together with a FEM reference
-   solution (generated locally via `src/fem/cahn_hilliard.py`) to compute
-   relative L2 error, energy dissipation comparison, and mass conservation.
+   machine, run `src/pinn/evaluate.py` and `src/pinn/diagnostics.py` (energy
+   dissipation and mass conservation over time, via `src/common/metrics.py`),
+   then `src/pinn/plot_results.py` to turn those into plots -- see
+   "Evaluating and plotting a trained checkpoint" in the README. For
+   PINN-vs-FEM comparison, generate a FEM reference locally
+   (`src/fem/cahn_hilliard.py`) at a matching `--epsilon`.
 
 The `.pt` checkpoint is the only artifact that needs to travel between the
 two machines.
