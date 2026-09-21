@@ -240,6 +240,16 @@ domain bounds (`--x-max`/`--y-max`/`--t-max`), point counts
 (`--hidden-layers`/`--hidden-width`), and optimizer settings
 (`--lr`, `--lbfgs-steps`).
 
+**A note on `--lbfgs-steps`.** It counts *outer* `LBFGS.step(closure)`
+calls, each of which runs up to 20 inner iterations — so the recorded
+loss history grows by up to 20 entries per step, and `--lbfgs-steps 1000`
+would mean ~20 000 closure evaluations, not 1000. Since L-BFGS on a fixed
+point set typically plateaus long before that, training stops early once
+the total loss has improved by less than `--lbfgs-tol` (default `1e-6`,
+relative) for `--lbfgs-patience` consecutive steps (default `3`); pass
+`--lbfgs-patience 0` to always run the full budget. A diverged run whose
+loss goes NaN also stops here rather than burning the remaining steps.
+
 **Output — one folder per run.** `train.py` writes everything under
 `results/pinn_models/<run-name>/` (`--run-name`; defaults to a
 `YYYYMMDD_HHMMSS` timestamp if you don't pass one — always pass a

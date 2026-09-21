@@ -24,7 +24,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hidden-layers", type=int, default=5)
     parser.add_argument("--hidden-width", type=int, default=100)
     parser.add_argument("--epochs", type=int, default=100, help="Adam epochs before L-BFGS")
-    parser.add_argument("--lbfgs-steps", type=int, default=10, help="L-BFGS refinement steps")
+    parser.add_argument(
+        "--lbfgs-steps",
+        type=int,
+        default=70,
+        help="L-BFGS refinement steps. Each one is a .step(closure) call "
+        "running up to 20 inner iterations, so this is an upper bound of "
+        "~20x that many closure evaluations -- see --lbfgs-patience.",
+    )
+    parser.add_argument(
+        "--lbfgs-tol",
+        type=float,
+        default=1e-6,
+        help="Relative improvement in the total loss below which an L-BFGS "
+        "step counts as stalled (early-stopping threshold).",
+    )
+    parser.add_argument(
+        "--lbfgs-patience",
+        type=int,
+        default=3,
+        help="Stop L-BFGS after this many consecutive stalled steps. "
+        "0 disables early stopping and always runs --lbfgs-steps.",
+    )
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument(
         "--energy-penalty",
@@ -72,6 +93,27 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--smoke-test", action="store_true", help="Run a handful of iterations only")
     return parser.parse_args()
+
+
+def is_improvement(total: float, best: float | None, tol: float) -> bool:
+    """Whether `total` beats the best total loss so far by enough to count.
+
+    Args:
+        total: the total loss after the L-BFGS step just taken.
+        best: the lowest total seen so far, or None before any step.
+        tol: minimum *relative* improvement, as a fraction of |best|.
+            Relative rather than absolute so the same threshold works
+            whether a run plateaus at 1e-1 or 1e-6.
+
+    Returns:
+        True for the first step (best is None) and whenever `total` is at
+        least `tol * abs(best)` below `best`. False for NaN, since every
+        comparison against NaN is False -- a diverged run reads as stalled
+        rather than as endless improvement.
+    """
+    if best is None:
+        return True
+    return total < best - tol * abs(best)
 
 
 def train(args: argparse.Namespace) -> None:
@@ -155,12 +197,34 @@ def train(args: argparse.Namespace) -> None:
         last_losses = losses
         return losses["total"]
 
+    # L-BFGS on a fixed point set usually converges well before
+    # --lbfgs-steps is exhausted, and a step taken after convergence is not
+    # free: it still re-evaluates the closure ~20x and appends to history.
+    # Stop once the total loss has failed to improve for --lbfgs-patience
+    # consecutive steps. A NaN total never counts as an improvement, so a
+    # diverged run stops here too.
+    best_total: float | None = None
+    stalled = 0
     for lbfgs_step in range(lbfgs_steps):
         lbfgs.step(closure)
         print(f"[lbfgs] step {lbfgs_step + 1:3d}/{lbfgs_steps} {format_losses(last_losses)}")
         if lbfgs_step % args.checkpoint_every == 0:
             checkpoint_path = os.path.join(checkpoints_dir, f"checkpoint_step{len(history['total']):06d}.pt")
             save_checkpoint(model, checkpoint_path, args, history)
+
+        total = last_losses["total"].item()
+        if is_improvement(total, best_total, args.lbfgs_tol):
+            best_total = total
+            stalled = 0
+        else:
+            stalled += 1
+            if args.lbfgs_patience and stalled >= args.lbfgs_patience:
+                print(
+                    f"[lbfgs] early stop after step {lbfgs_step + 1}/{lbfgs_steps}: "
+                    f"total loss improved by less than {args.lbfgs_tol:g} (relative) "
+                    f"for {stalled} consecutive steps"
+                )
+                break
 
     save_checkpoint(model, final_path, args, history)
     print(f"final model: {final_path}")

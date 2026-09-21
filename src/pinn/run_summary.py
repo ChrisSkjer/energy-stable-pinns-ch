@@ -13,7 +13,7 @@ _RUN_SUMMARY_GROUPS: list[tuple[str, tuple[str, ...]]] = [
     ("network", ("hidden_layers", "hidden_width")),
     ("domain", ("x_max", "y_max", "t_max", "epsilon")),
     ("sampling", ("n_collocation", "n_ic", "n_bc", "pde_at_t0")),
-    ("optimizer", ("epochs", "lr", "lbfgs_steps")),
+    ("optimizer", ("epochs", "lr", "lbfgs_steps", "lbfgs_tol", "lbfgs_patience")),
     ("loss weights", ("pde_weight", "ic_weight", "bc_weight", "energy_penalty", "energy_weight")),
 ]
 
@@ -63,6 +63,8 @@ def _format_training_block(args: dict, history: dict[str, list[float]]) -> list[
         # LBFGS(max_iter=20).step(closure) invokes the closure ~20x per call
         # (line-search + gradient evals), and train.py's closure records
         # every invocation -- so this is NOT the same as --lbfgs-steps.
+        # It can also fall short of 20x --lbfgs-steps: train.py stops early
+        # once the total loss stalls (--lbfgs-patience).
         f"  lbfgs closure evals: {lbfgs_evals}",
     ]
     for name in _LOSS_TERM_ORDER:
