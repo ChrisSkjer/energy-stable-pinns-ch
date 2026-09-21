@@ -27,7 +27,8 @@ FEniCSx (DOLFINx).
 │   ├── fem/        # DOLFINx Cahn-Hilliard solver (ground-truth baseline)
 │   └── common/     # shared utils: metrics (relative L2, energy, mass), plotting
 ├── data/           # generated FEM reference solutions (gitignored, local only)
-├── notebooks/      # exploration notebooks
+├── notebooks/      # train_pinn.ipynb (Colab GPU training runner),
+│                   # pinn_demo.ipynb (self-contained demo), exploration
 ├── results/        # figures, logs, benchmark tables; results/pinn_models/<run>/
 │                   # holds each training run's checkpoints + evaluation + plots
 │                   # (all gitignored)
@@ -222,7 +223,10 @@ a couple of seconds on CPU. It proves the code path works end to end; it
 says nothing about training quality, so don't read anything into the loss
 value it produces.
 
-**A real run** (on Colab GPU — see below), e.g.:
+**A real run** goes on a Colab GPU — use
+[notebooks/train_pinn.ipynb](notebooks/train_pinn.ipynb), which wraps the
+command below in a ready-made clone → install → train → retrieve notebook
+(see "Training on Colab"):
 
 ```bash
 python -m src.pinn.train --run-name eps0.01_h64x4 --device cuda --epochs 20000 --checkpoint-every 500
@@ -384,18 +388,62 @@ you need that test to actually execute.
 
 ## Training on Colab
 
-1. Clone the repo in a Colab cell and `pip install -r requirements-colab.txt`
-   (no FEM data needed there).
-2. Train the PINN (baseline or enhanced, via `--energy-penalty`) using the
-   `-m src.pinn.train` invocation above, with `--device cuda` and a
-   descriptive `--run-name`.
-3. Download the resulting `results/pinn_models/<run-name>/` folder back to
-   the local machine (at minimum `final.pt`) to run evaluation/plotting and
-   comparison against the local FEM output. If you drive the notebook from
-   VS Code rather than the Colab web page, `files.download` won't work —
-   use `scripts/pull_colab_model.py` instead (see the walkthrough).
+[notebooks/train_pinn.ipynb](notebooks/train_pinn.ipynb) is the training
+runner: the whole clone → install → GPU check → train → retrieve loop as six
+cells, so a GPU run is a matter of setting `run_name` once and running top to
+bottom.
 
-See [docs/colab_workflow.md](docs/colab_workflow.md) for the full walkthrough.
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ChrisSkjer/energy-stable-pinns-ch/blob/main/notebooks/train_pinn.ipynb)
+
+<https://colab.research.google.com/github/ChrisSkjer/energy-stable-pinns-ch/blob/main/notebooks/train_pinn.ipynb>
+
+Two things to get right before running anything:
+
+- **`git push` first.** Cell 1 clones `main` from GitHub, not your working
+  directory — unpushed local edits to `src/pinn/` mean Colab silently trains
+  the *old* code.
+- **Runtime → Change runtime type → T4 GPU**, before executing cells —
+  switching later restarts the runtime and wipes the VM's disk.
+
+What the cells do:
+
+1. `git clone` the repo and `%cd` into it (add `-b <branch>` if you pushed
+   something other than `main`).
+2. `pip install -r requirements-colab.txt` (torch/numpy/matplotlib are
+   already there).
+3. Print `torch.cuda.is_available()` and the device name — a runtime set to
+   "GPU" can still hand you a CPU box. If it prints `False`, fix the runtime
+   type and rerun from the top.
+4. `run_name = "smoke"` — set once here; the training and retrieval cells
+   both read it.
+5. Train. Ships as the `--smoke-test` invocation so you confirm the code path
+   end to end in a few seconds before committing a session to a long run; for
+   the real run edit this cell — drop `--smoke-test`, set a descriptive
+   `run_name`, and add `--epochs 20000 --checkpoint-every 500`, plus
+   `--energy-penalty` for the enhanced model. Everything lands in
+   `results/pinn_models/<run-name>/`.
+6. Retrieve `final.pt` by base64-encoding it into the cell output. This is
+   the route that works when the notebook is driven from **VS Code** against
+   a Colab kernel, where `google.colab.files.download` silently does nothing;
+   save the notebook (`Ctrl+S`) so VS Code stores the output locally, then
+   decode it with:
+
+   ```powershell
+   .venv\Scripts\python.exe scripts\pull_colab_model.py
+   ```
+
+   Running in the Colab web page instead? Use the file browser or
+   `files.download` on a zip of the run folder; for full checkpoint histories
+   or anything large, mount Drive and copy there. All three routes are in the
+   walkthrough.
+
+Once the `.pt` is back on the local machine, `scripts/analyze_run.py
+<run-name>` produces the evaluation, diagnostics, and plots (see "Evaluating
+and plotting a trained checkpoint" above) — the checkpoint is the only
+artifact that needs to travel between the two machines.
+
+See [docs/colab_workflow.md](docs/colab_workflow.md) for the full walkthrough,
+including the official `colab` CLI as an alternative to notebook cells.
 
 ## Status
 
