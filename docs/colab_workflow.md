@@ -94,15 +94,34 @@ reference solutions.
      from google.colab import files
      files.download(f"{run_name}.zip")
      ```
+     Both of these need the real colab.research.google.com page open —
+     `files.download` hands the file to that page's JavaScript, so it does
+     nothing at all when the notebook is driven from VS Code against a Colab
+     kernel (see below).
    - pushing it to Google Drive after mounting it:
      ```python
      from google.colab import drive
      drive.mount("/content/drive")
      !cp -r results/pinn_models/{run_name} "/content/drive/MyDrive/pinn_runs/{run_name}"
      ```
+   - **driving the notebook from VS Code** (Jupyter extension pointed at a
+     Colab kernel) — neither route above applies, since there's no Colab
+     frontend to receive a download and the run folder lives only on the
+     remote VM. `notebooks/train_pinn.ipynb`'s last cell instead base64-encodes
+     `final.pt` into the cell output, which VS Code stores in the `.ipynb`
+     locally once you save it (Ctrl+S). Then decode it into
+     `results/pinn_models/<run-name>/` with:
+     ```powershell
+     python scripts\pull_colab_model.py
+     ```
+     Fine for a single `final.pt` (a few hundred KB); for full checkpoint
+     histories or much larger models, use the Drive route instead.
 
 7. **Run comparisons locally.** Once the `.pt` weights are back on the local
-   machine, run `src/pinn/evaluate.py` and `src/pinn/diagnostics.py` (energy
+   machine, `python scripts/analyze_run.py <run-name>` runs the whole
+   evaluate → diagnostics → plot chain in one go (add `--fem-diagnostics
+   <path>` to overlay the FEM reference). To run the steps individually
+   instead, call `src/pinn/evaluate.py` and `src/pinn/diagnostics.py` (energy
    dissipation and mass conservation over time, via `src/common/metrics.py`),
    then `src/pinn/plot_results.py` to turn those into plots -- see
    "Evaluating and plotting a trained checkpoint" in the README. For

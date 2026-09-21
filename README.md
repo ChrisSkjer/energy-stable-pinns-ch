@@ -259,7 +259,26 @@ compute it yourself.
 
 ## Evaluating and plotting a trained checkpoint
 
-**Quick look at a run** — set `$run` once, paste all three:
+**Quick look at a run — one command.** `scripts/analyze_run.py` runs all
+three steps below in sequence, so the run name is typed once instead of
+threaded through three separate flags. It changes no defaults; each step
+writes exactly what it would when invoked by hand:
+
+```powershell
+.venv\Scripts\python.exe scripts\analyze_run.py demo_run
+```
+
+Useful flags: `--t 0.0 0.01 0.05` (snapshot times passed to `evaluate`),
+`--device cuda`, and `--fem-diagnostics <path>` to overlay a FEM reference on
+the energy/mass plots:
+
+```powershell
+.venv\Scripts\python.exe scripts\analyze_run.py demo_run --fem-diagnostics results/eps0.05_nx96_dt2e-4/cahn_hilliard_diagnostics.csv
+```
+
+**Or run the three by hand** — set `$run` once, paste all three. Do this when
+you want flags the wrapper doesn't expose (`--nx`/`--ny` resolution,
+`--epsilon`, `--output` overrides), or to re-run just one step:
 
 ```powershell
 $run = "demo_run"  # <- change this to the run-name you want to look at
@@ -269,10 +288,9 @@ $run = "demo_run"  # <- change this to the run-name you want to look at
 .venv\Scripts\python.exe -m src.pinn.plot_results --evaluation results/pinn_models/$run/evaluation.npz --checkpoint results/pinn_models/$run/final.pt
 ```
 
-Drops everything into `results/pinn_models/<run-name>/plots/` — see the
-per-script breakdown below for what each one produces and what flags exist
-beyond the defaults used here (e.g. different `--t` snapshots, `--nx`/`--ny`
-resolution, `--fem-diagnostics` to overlay a FEM reference).
+Either way, everything lands in `results/pinn_models/<run-name>/plots/` — see
+the per-script breakdown below for what each one produces and what flags exist
+beyond the defaults used here.
 
 Three more thin CLI scripts, run the same way as `train.py` above (`-m`, from
 the repo root, same venv). All three default their output into the *same*
@@ -373,7 +391,9 @@ you need that test to actually execute.
    descriptive `--run-name`.
 3. Download the resulting `results/pinn_models/<run-name>/` folder back to
    the local machine (at minimum `final.pt`) to run evaluation/plotting and
-   comparison against the local FEM output.
+   comparison against the local FEM output. If you drive the notebook from
+   VS Code rather than the Colab web page, `files.download` won't work —
+   use `scripts/pull_colab_model.py` instead (see the walkthrough).
 
 See [docs/colab_workflow.md](docs/colab_workflow.md) for the full walkthrough.
 
