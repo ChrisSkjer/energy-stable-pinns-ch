@@ -378,9 +378,15 @@ stdout):
   passed or auto-detected); pass both to overlay PINN against a FEM
   reference (auto-clipped to the PINN's own time window).
 
-Not produced yet: PINN-vs-FEM field comparison plots — blocked on
-`src/fem/cahn_hilliard.py` not saving raw field arrays (only PNG frames and
-the diagnostics CSV).
+- `comparison_<idx>_t<value>.png` — PINN-vs-FEM field comparison, one per
+  evaluation time (only if `--fem-fields` was passed, which also requires
+  `--evaluation`). Needs a `fem_fields.npz` from a FEM run with `save_fields`
+  on, evaluated on the same `(x, y)` grid — i.e. matching `--nx`/`--ny`.
+
+See [docs/post_training_cheatsheet.md](docs/post_training_cheatsheet.md) for
+all of the above condensed into one command reference — every flag, its
+default, and the gotchas (`--t` outside the trained window, mismatched
+`--epsilon`, grid mismatch on comparisons).
 
 ## Running tests
 
