@@ -71,20 +71,21 @@ class CahnHilliardConfig:
     dt rather than aborting, so a slightly-too-large dt self-corrects.
     """
 
-    nx: int = 200
-    ny: int = 200
-    epsilon: float = 0.02  # interface-width parameter; needs nx >~ 4/epsilon
+    nx: int = 100
+    ny: int = 100
+    epsilon: float = 0.05  # interface-width parameter; needs nx >~ 4/epsilon
     mobility: float = 1.0
-    dt: float = 2.0e-4  # ~tau/50; initial/maximum step, reduced if adaptive_dt
-    t_final: float = 0.5  # ~50*tau, enough for full separation at epsilon=0.05
+    dt: float = 1.0e-4  # ~tau/50; initial/maximum step, reduced if adaptive_dt
+    t_final: float = 0.1  # ~50*tau, enough for full separation at epsilon=0.05
     theta: float = 0.5  # Crank-Nicolson parameter
-    log_every: int = 1  # write diagnostics every N time steps
+    log_every: int = 5  # write diagnostics every N time steps
     seed: int = 42  # random seed for the initial condition
     visualize: bool = True  # save concentration-field PNG frames
-    viz_every: int = 25  # save a frame every N time steps (if visualize)
+    viz_every: int = 55  # save a frame every N time steps (if visualize)
     show_gridpoints: bool = False  # overlay mesh vertices on the solution frames
     adaptive_dt: bool = True  # halve dt and retry when a Newton solve fails
     dt_min: float = 1.0e-12  # give up if an adaptive step falls below this
+    save_fields: bool = True  # dump (u, mu) on a regular grid, for PINN comparison
 
 
 class _DiagnosticsLogger:
@@ -199,6 +200,73 @@ class _FrameWriter:
         plotter.close()
 
 
+def _interpolate_to_grid(coords: np.ndarray, values: np.ndarray, X: np.ndarray, Y: np.ndarray) -> np.ndarray:
+    """Scatter DOF values onto a regular (nx, ny) grid via linear interpolation.
+
+    Falls back to nearest-neighbor for any grid point griddata leaves as NaN
+    -- happens occasionally right at the domain boundary, where a target
+    point sits exactly on (rather than safely inside) the DOF convex hull.
+    """
+    from scipy.interpolate import griddata
+
+    grid = griddata(coords, values, (X, Y), method="linear")
+    nan_mask = np.isnan(grid)
+    if nan_mask.any():
+        grid[nan_mask] = griddata(coords, values, (X[nan_mask], Y[nan_mask]), method="nearest")
+    return grid
+
+
+class _FieldRecorder:
+    """Collects (t, u, mu) snapshots on a regular grid, for saving to an .npz
+    that PINN vs. FEM comparisons can load directly.
+
+    Uses the same (x, y, t, u, mu) layout as src/pinn/evaluate.py's
+    save_evaluation, so src/common/plotting.py::plot_comparison can consume
+    either one -- x, y are (nx, ny) meshgrids (np.meshgrid(..., indexing="ij"))
+    and u, mu are (len(t), nx, ny).
+
+    DOLFINx's P1 dofs for create_unit_square(nx, ny) sit exactly on this grid
+    but not in raster order, so each snapshot is scattered onto (nx, ny) with
+    scipy.interpolate.griddata rather than reshaped directly.
+    """
+
+    def __init__(self, every: int, V0, dofs0, V1, dofs1, nx: int, ny: int) -> None:
+        if every < 1:
+            raise ValueError("viz_every must be at least 1")
+        self.every = every
+        self.dofs0 = dofs0[0] if isinstance(dofs0, list) else dofs0
+        self.dofs1 = dofs1[0] if isinstance(dofs1, list) else dofs1
+        self.coords0 = V0.tabulate_dof_coordinates()[:, :2]
+        self.coords1 = V1.tabulate_dof_coordinates()[:, :2]
+        x = np.linspace(0.0, 1.0, nx)
+        y = np.linspace(0.0, 1.0, ny)
+        self.X, self.Y = np.meshgrid(x, y, indexing="ij")
+        self.times: list[float] = []
+        self.u_frames: list[np.ndarray] = []
+        self.mu_frames: list[np.ndarray] = []
+
+    def save(self, step: int, t: float, u_array: np.ndarray) -> None:
+        if step % self.every != 0:
+            return
+        u_vals = u_array[self.dofs0].real
+        mu_vals = u_array[self.dofs1].real
+        self.times.append(t)
+        self.u_frames.append(_interpolate_to_grid(self.coords0, u_vals, self.X, self.Y))
+        self.mu_frames.append(_interpolate_to_grid(self.coords1, mu_vals, self.X, self.Y))
+
+    def write(self, output_dir: str) -> Path:
+        path = Path(output_dir) / "fem_fields.npz"
+        np.savez(
+            path,
+            x=self.X,
+            y=self.Y,
+            t=np.array(self.times),
+            u=np.stack(self.u_frames, axis=0),
+            mu=np.stack(self.mu_frames, axis=0),
+        )
+        return path
+
+
 def parse_args() -> argparse.Namespace:
     """CLI flags mirrored 1:1 from CahnHilliardConfig fields, so they can't drift."""
     parser = argparse.ArgumentParser(description="Run the Cahn-Hilliard FEM solver")
@@ -298,7 +366,13 @@ def solve(
     """Run the Cahn-Hilliard time-stepping loop.
 
     Logs free energy E(t) and total mass over time to `output_dir` (stays
-    local — this data never needs to leave this machine).
+    local — this data never needs to leave this machine). Also writes, at
+    `config.viz_every` cadence:
+      - `frames/frame_*.png`, if `config.visualize` (rendered snapshots).
+      - `fem_fields.npz` (x, y, t, u, mu), if `config.save_fields` -- raw
+        field data on the same (nx, ny) grid layout as a PINN evaluation.npz
+        (see src/pinn/evaluate.py::save_evaluation), for direct comparison
+        via src/common/plotting.py::plot_comparison.
 
     Args:
         config: solver configuration (mesh resolution, epsilon, mobility, dt, t_final).
@@ -431,10 +505,17 @@ def solve(
     u0.x.array[:] = u.x.array
 
     frames = None
+    field_recorder = None
+    if config.visualize or config.save_fields:
+        V0, dofs0 = ME.sub(0).collapse()
     if config.visualize:
-        V0, dofs = ME.sub(0).collapse()
         frames = _FrameWriter(
-            output_dir, config.viz_every, V0, dofs, config.show_gridpoints
+            output_dir, config.viz_every, V0, dofs0, config.show_gridpoints
+        )
+    if config.save_fields:
+        V1, dofs1 = ME.sub(1).collapse()
+        field_recorder = _FieldRecorder(
+            config.viz_every, V0, dofs0, V1, dofs1, config.nx, config.ny
         )
 
     diagnostics = _DiagnosticsLogger(output_dir, config.log_every)
@@ -445,6 +526,8 @@ def solve(
         diagnostics.log(step, t, e, m)
         if frames is not None:
             frames.save(step, t, u.x.array)
+        if field_recorder is not None:
+            field_recorder.save(step, t, u.x.array)
 
         dt_current = config.dt
         successes_at_dt = 0
@@ -478,6 +561,8 @@ def solve(
             diagnostics.log(step, t, e, m)
             if frames is not None:
                 frames.save(step, t, u.x.array)
+            if field_recorder is not None:
+                field_recorder.save(step, t, u.x.array)
 
             # creep back toward the requested dt once the step is settled again
             successes_at_dt += 1
@@ -486,6 +571,8 @@ def solve(
                 successes_at_dt = 0
     finally:
         diagnostics.close()
+        if field_recorder is not None and field_recorder.times:
+            field_recorder.write(output_dir)
 
     return Path(output_dir) / "cahn_hilliard_diagnostics.csv"
 

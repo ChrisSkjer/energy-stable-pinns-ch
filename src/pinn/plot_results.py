@@ -18,9 +18,11 @@ and evaluation they came from without saying so explicitly. If --diagnostics
 is omitted, a diagnostics.csv inside that same run folder is picked up
 automatically when present.
 
-PINN vs. FEM field comparison isn't wired up yet: plotting.plot_comparison
-needs raw FEM field arrays, and src/fem/cahn_hilliard.py currently saves
-only PNG frames and the diagnostics CSV, not an array dump.
+PINN vs. FEM field comparison: pass --evaluation together with --fem-fields
+(a fem_fields.npz written by src/fem/cahn_hilliard.py, see its
+_FieldRecorder) to get plotting.plot_comparison PNGs, one per PINN
+evaluation time. Requires both to share the same (x, y) grid, i.e. matching
+--nx/--ny between `python -m src.pinn.evaluate` and the FEM run.
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ import torch
 
 from src.common.plotting import (
     load_diagnostics,
+    plot_comparison,
     plot_energy_dissipation,
     plot_field,
     plot_loss_history,
@@ -79,6 +82,15 @@ def parse_args() -> argparse.Namespace:
         "Never auto-detected -- pass it explicitly.",
     )
     parser.add_argument(
+        "--fem-fields",
+        type=str,
+        default=None,
+        help="Path to a fem_fields.npz from a FEM run (src/fem/cahn_hilliard.py's "
+        "_FieldRecorder). Requires --evaluation: produces one PINN-vs-FEM "
+        "comparison PNG per PINN evaluation time, matched to the closest FEM "
+        "snapshot time.",
+    )
+    parser.add_argument(
         "--output-dir",
         type=str,
         default=None,
@@ -97,6 +109,8 @@ def parse_args() -> argparse.Namespace:
         parser.error(
             "pass at least one of --evaluation, --checkpoint, --diagnostics, or --fem-diagnostics"
         )
+    if args.fem_fields is not None and args.evaluation is None:
+        parser.error("--fem-fields requires --evaluation")
 
     if args.evaluation is not None:
         run_dir = os.path.dirname(os.path.abspath(args.evaluation))
@@ -155,6 +169,49 @@ def plot_evaluation(evaluation_path: str, output_dir: str, dpi: int = 150) -> li
         path = os.path.join(output_dir, f"field_mu_{idx:03d}_t{t_val:g}.png")
         ax.figure.savefig(path, dpi=dpi, bbox_inches="tight")
         plt.close(ax.figure)
+        saved.append(path)
+
+    return saved
+
+
+def plot_field_comparison(
+    evaluation_path: str, fem_fields_path: str, output_dir: str, dpi: int = 150
+) -> list[str]:
+    """Save one PINN-vs-FEM comparison PNG (plotting.plot_comparison) per
+    PINN evaluation time, matched to the closest FEM snapshot time in
+    fem_fields.npz.
+
+    Raises if the two .npz files aren't on the same (x, y) grid -- re-run
+    with matching --nx/--ny between `python -m src.pinn.evaluate` and the
+    FEM run otherwise.
+
+    Returns the list of saved PNG paths, in PINN time order.
+    """
+    pinn = np.load(evaluation_path)
+    fem = np.load(fem_fields_path)
+
+    if pinn["x"].shape != fem["x"].shape or not np.allclose(pinn["x"], fem["x"]) or not np.allclose(
+        pinn["y"], fem["y"]
+    ):
+        raise ValueError(
+            f"{evaluation_path} and {fem_fields_path} are on different (x, y) grids "
+            "-- re-run src/pinn/evaluate.py with --nx/--ny matching the FEM run's."
+        )
+
+    saved = []
+    fem_t = fem["t"]
+    for idx, t_val in enumerate(pinn["t"]):
+        fem_idx = int(np.argmin(np.abs(fem_t - t_val)))
+        matched_t = fem_t[fem_idx]
+        if abs(matched_t - t_val) > 1e-9:
+            warnings.warn(
+                f"PINN t={t_val:g} has no exact FEM snapshot; using closest one "
+                f"at t={matched_t:g} instead"
+            )
+        fig, _ = plot_comparison(pinn["x"], pinn["y"], pinn["u"][idx], fem["u"][fem_idx])
+        path = os.path.join(output_dir, f"comparison_{idx:03d}_t{t_val:g}.png")
+        fig.savefig(path, dpi=dpi, bbox_inches="tight")
+        plt.close(fig)
         saved.append(path)
 
     return saved
@@ -257,6 +314,10 @@ if __name__ == "__main__":
     if cli_args.diagnostics is not None or cli_args.fem_diagnostics is not None:
         saved_paths += plot_diagnostics(
             cli_args.diagnostics, cli_args.fem_diagnostics, cli_args.output_dir, dpi=cli_args.dpi
+        )
+    if cli_args.fem_fields is not None:
+        saved_paths += plot_field_comparison(
+            cli_args.evaluation, cli_args.fem_fields, cli_args.output_dir, dpi=cli_args.dpi
         )
 
     for path in saved_paths:

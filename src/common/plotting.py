@@ -93,12 +93,10 @@ def plot_comparison(
     Visual counterpart to metrics.relative_l2_error -- keep both in view
     when writing this one, they should tell the same story two ways.
 
-    OPEN QUESTION: src/fem/cahn_hilliard.py currently only saves PNG frames
-    (via pyvista) and scalar diagnostics, not raw (nx, ny) field arrays -- so
-    there's nothing to pass as c_fem yet without adding an array dump to the
-    FEM solver (e.g. alongside _FrameWriter.save, or as an .npz per logged
-    step). Still unresolved -- this function has no real caller until that's
-    decided.
+    x, y, c_fem come from a FEM run's fem_fields.npz (see
+    src/fem/cahn_hilliard.py::_FieldRecorder); c_pinn from a PINN run's
+    evaluation.npz (see src/pinn/evaluate.py::save_evaluation) evaluated on
+    the same x, y grid. src/pinn/plot_results.py wires the two together.
 
     Returns:
         (fig, (ax_pinn, ax_fem, ax_diff)).

@@ -197,12 +197,6 @@ def train(args: argparse.Namespace) -> None:
         last_losses = losses
         return losses["total"]
 
-    # L-BFGS on a fixed point set usually converges well before
-    # --lbfgs-steps is exhausted, and a step taken after convergence is not
-    # free: it still re-evaluates the closure ~20x and appends to history.
-    # Stop once the total loss has failed to improve for --lbfgs-patience
-    # consecutive steps. A NaN total never counts as an improvement, so a
-    # diverged run stops here too.
     best_total: float | None = None
     stalled = 0
     for lbfgs_step in range(lbfgs_steps):
