@@ -185,7 +185,7 @@ def train(args: argparse.Namespace) -> None:
             save_checkpoint(model, checkpoint_path, args, history)
 
     lbfgs_steps = 2 if args.smoke_test else args.lbfgs_steps
-    lbfgs = torch.optim.LBFGS(model.parameters(), lr=1.0, max_iter=20)
+    lbfgs = torch.optim.LBFGS(model.parameters(), lr=1.0, max_iter=20, line_search_fn="stronge_wolfe")
     last_losses: dict[str, torch.Tensor] = {}
 
     def closure() -> torch.Tensor:
