@@ -81,7 +81,7 @@ class CahnHilliardConfig:
     log_every: int = 5  # write diagnostics every N time steps
     seed: int = 42  # random seed for the initial condition
     visualize: bool = True  # save concentration-field PNG frames
-    viz_every: int = 55  # save a frame every N time steps (if visualize)
+    viz_every: int = 5  # save a frame every N time steps (if visualize)
     show_gridpoints: bool = False  # overlay mesh vertices on the solution frames
     adaptive_dt: bool = True  # halve dt and retry when a Newton solve fails
     dt_min: float = 1.0e-12  # give up if an adaptive step falls below this

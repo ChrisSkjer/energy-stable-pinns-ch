@@ -63,13 +63,16 @@ def ic_loss(
     Args:
         model: the PINN.
         ic_points: (N_ic, input_dim) points at t=0.
-        ic_values: (N_ic, output_dim) target values at ic_points.
+        ic_values: (N_ic, 1) target u values at ic_points -- the u channel
+            only, matching `sampling.cross_initial_condition`. There is no
+            target for mu here: its t=0 value is not free to choose, it is
+            fixed by the IC through mu = f'(u0) - eps^2 * laplacian(u0).
 
     Returns:
         Scalar MSE of the IC term.
     """
-    out_ic = model(ic_points)
-    return torch.mean((out_ic - ic_values) ** 2)
+    u_ic = model(ic_points)[:, 0:1]
+    return torch.mean((u_ic - ic_values) ** 2)
 
 
 def bc_loss(model: nn.Module, bc_points: torch.Tensor) -> torch.Tensor:
