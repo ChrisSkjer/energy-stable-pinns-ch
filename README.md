@@ -250,6 +250,16 @@ relative) for `--lbfgs-patience` consecutive steps (default `3`); pass
 `--lbfgs-patience 0` to always run the full budget. A diverged run whose
 loss goes NaN also stops here rather than burning the remaining steps.
 
+**Adam lr schedule and early stopping (opt-in).** `--plateau-patience N`
+wraps Adam in `ReduceLROnPlateau`: after `N` epochs without a relative
+improvement of `--adam-tol` (default `1e-4`) in the total loss, the lr is
+multiplied by `--plateau-factor` (default `0.5`), down to `--min-lr`
+(default `1e-6`). `--adam-patience M` ends the Adam phase after `M` stalled
+epochs and restores the best weights seen before handing over to L-BFGS.
+Pick `M` several times larger than `N` so the lr can drop a few times
+before Adam gives up. Both default to `0` (off), which keeps the old
+constant-lr, fixed-epoch behaviour.
+
 **Output — one folder per run.** `train.py` writes everything under
 `results/pinn_models/<run-name>/` (`--run-name`; defaults to a
 `YYYYMMDD_HHMMSS` timestamp if you don't pass one — always pass a

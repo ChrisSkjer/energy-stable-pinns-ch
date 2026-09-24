@@ -13,7 +13,21 @@ _RUN_SUMMARY_GROUPS: list[tuple[str, tuple[str, ...]]] = [
     ("network", ("hidden_layers", "hidden_width")),
     ("domain", ("x_max", "y_max", "t_max", "epsilon")),
     ("sampling", ("n_collocation", "n_ic", "n_bc", "pde_at_t0")),
-    ("optimizer", ("epochs", "lr", "lbfgs_steps", "lbfgs_tol", "lbfgs_patience")),
+    (
+        "optimizer",
+        (
+            "epochs",
+            "lr",
+            "adam_tol",
+            "plateau_patience",
+            "plateau_factor",
+            "min_lr",
+            "adam_patience",
+            "lbfgs_steps",
+            "lbfgs_tol",
+            "lbfgs_patience",
+        ),
+    ),
     ("loss weights", ("pde_weight", "ic_weight", "bc_weight", "energy_penalty", "energy_weight")),
 ]
 

@@ -48,6 +48,32 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument(
+        "--adam-tol",
+        type=float,
+        default=1e-4,
+        help="Relative improvement in the total loss below which an Adam "
+        "epoch counts as stalled. Shared by --plateau-patience and "
+        "--adam-patience.",
+    )
+    parser.add_argument(
+        "--plateau-patience",
+        type=int,
+        default=0,
+        help="ReduceLROnPlateau: multiply the Adam lr by --plateau-factor "
+        "after this many stalled epochs. 0 disables (constant lr).",
+    )
+    parser.add_argument("--plateau-factor", type=float, default=0.5, help="LR multiplier on each plateau")
+    parser.add_argument("--min-lr", type=float, default=1e-6, help="Lower bound for the plateau-reduced lr")
+    parser.add_argument(
+        "--adam-patience",
+        type=int,
+        default=0,
+        help="Stop Adam after this many consecutive stalled epochs and restore "
+        "the best weights seen before moving on to L-BFGS. 0 disables. "
+        "Set it well above --plateau-patience so the lr gets a chance to drop "
+        "a few times first.",
+    )
+    parser.add_argument(
         "--energy-penalty",
         action="store_true",
         help="Enable the energy-stability penalty term (enhanced model). "
@@ -99,7 +125,7 @@ def is_improvement(total: float, best: float | None, tol: float) -> bool:
     """Whether `total` beats the best total loss so far by enough to count.
 
     Args:
-        total: the total loss after the L-BFGS step just taken.
+        total: the total loss after the Adam epoch or L-BFGS step just taken.
         best: the lowest total seen so far, or None before any step.
         tol: minimum *relative* improvement, as a fraction of |best|.
             Relative rather than absolute so the same threshold works
@@ -166,23 +192,67 @@ def train(args: argparse.Namespace) -> None:
 
     epochs = 5 if args.smoke_test else args.epochs
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    scheduler = None
+    if args.plateau_patience:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=args.plateau_factor,
+            patience=args.plateau_patience,
+            threshold=args.adam_tol,
+            threshold_mode="rel",
+            min_lr=args.min_lr,
+        )
     history: dict[str, list[float]] = {}
 
     def record(losses: dict[str, torch.Tensor]) -> None:
         for name, value in losses.items():
             history.setdefault(name, []).append(value.item())
 
+    best_adam_total: float | None = None
+    best_adam_state: dict[str, torch.Tensor] | None = None
+    adam_stalled = 0
     for epoch in range(epochs):
         optimizer.zero_grad()
         losses = compute_loss(points)
         losses["total"].backward()
+        # The loss belongs to the weights *before* this update, so snapshot
+        # them now in case they turn out to be the best seen.
+        if args.adam_patience:
+            pre_step_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
         optimizer.step()
         record(losses)
+        total = losses["total"].item()
+        lr = optimizer.param_groups[0]["lr"]
         if epoch % args.log_every == 0 or epoch == epochs - 1:
-            print(f"[adam] epoch {epoch:5d}/{epochs} {format_losses(losses)}")
+            print(f"[adam] epoch {epoch:5d}/{epochs} lr {lr:.2e} {format_losses(losses)}")
         if epoch % args.checkpoint_every == 0:
             checkpoint_path = os.path.join(checkpoints_dir, f"checkpoint_step{len(history['total']):06d}.pt")
             save_checkpoint(model, checkpoint_path, args, history)
+
+        if scheduler is not None:
+            scheduler.step(total)
+            new_lr = optimizer.param_groups[0]["lr"]
+            if new_lr < lr:
+                print(f"[adam] epoch {epoch:5d}/{epochs} plateau: lr {lr:.2e} -> {new_lr:.2e}")
+
+        if args.adam_patience:
+            if is_improvement(total, best_adam_total, args.adam_tol):
+                best_adam_total = total
+                best_adam_state = pre_step_state
+                adam_stalled = 0
+            else:
+                adam_stalled += 1
+                if adam_stalled >= args.adam_patience:
+                    print(
+                        f"[adam] early stop after epoch {epoch}/{epochs}: total loss improved by "
+                        f"less than {args.adam_tol:g} (relative) for {adam_stalled} consecutive epochs"
+                    )
+                    break
+
+    if best_adam_state is not None:
+        model.load_state_dict(best_adam_state)
+        print(f"[adam] restored best weights (total {best_adam_total:.4e})")
 
     lbfgs_steps = 2 if args.smoke_test else args.lbfgs_steps
     lbfgs = torch.optim.LBFGS(model.parameters(), lr=1.0, max_iter=20, line_search_fn="strong_wolfe")
