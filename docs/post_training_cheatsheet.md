@@ -48,13 +48,15 @@ the run name typed once. It changes no defaults.
 | `--t T [T ...]` | `0.0 0.001 0.005` | Snapshot times; must be inside the trained `[0, t_max]` |
 | `--device` | `cpu` | `cuda` if you're running this on Colab |
 | `--fem-diagnostics PATH` | none | Overlays a FEM reference on the energy/mass plots |
+| `--fem-fields PATH` | none | PINN-vs-FEM comparison plots of u and mu; evaluates on the FEM file's grid, so `--nx`/`--ny` match automatically |
 
 ```powershell
 .venv\Scripts\python.exe scripts\analyze_run.py $run --fem-diagnostics results/eps0.05_nx96_dt2e-4/cahn_hilliard_diagnostics.csv
 ```
 
-What it does **not** expose: `--nx`/`--ny`, `--epsilon`, `--nt`, `--output`
-overrides, and `--fem-fields` (the field-comparison plots). For any of those,
+What it does **not** expose: `--nx`/`--ny` (set from `--fem-fields` when
+given, otherwise evaluate's default), `--epsilon`, `--nt`, and `--output`
+overrides. For any of those,
 use the individual steps below.
 
 ## 2. The three steps by hand
@@ -116,7 +118,7 @@ to get everything in one folder.
 | `--checkpoint <pt>` | `loss_history.png` + `run_summary.txt` |
 | `--diagnostics <csv>` | `energy_dissipation.png`, `mass_conservation.png` |
 | `--fem-diagnostics <csv>` | FEM reference overlaid on those same two plots |
-| `--fem-fields <npz>` | `comparison_<idx>_t<val>.png` — requires `--evaluation` |
+| `--fem-fields <npz>` | `comparison_<idx>_t<val>.png` + `comparison_mu_<idx>_t<val>.png` — requires `--evaluation` |
 | `--output-dir` | defaults to `plots/` inside the inferred run folder |
 | `--dpi` | `150` |
 
@@ -194,7 +196,7 @@ results/pinn_models/<run-name>/
     ├── run_summary.txt
     ├── energy_dissipation.png
     ├── mass_conservation.png
-    └── comparison_000_t0.png ...   # only with --fem-fields
+    └── comparison_000_t0.png, comparison_mu_000_t0.png ...   # only with --fem-fields
 ```
 
 ## Gotchas

@@ -28,11 +28,14 @@ FEniCSx (DOLFINx).
 │   └── common/     # shared utils: metrics (relative L2, energy, mass), plotting
 ├── data/           # generated FEM reference solutions (gitignored, local only)
 ├── notebooks/      # train_pinn.ipynb (Colab GPU training runner),
-│                   # pinn_demo.ipynb (self-contained demo), exploration
+│                   # pinn_demo.ipynb (self-contained demo), pinn_CH_imp1.ipynb
+│                   # and pinns_exp.ipynb (early exploration)
 ├── results/        # figures, logs, benchmark tables; results/pinn_models/<run>/
 │                   # holds each training run's checkpoints + evaluation + plots
 │                   # (all gitignored)
-├── docs/           # thesis notes, literature extraction, workflow notes
+├── scripts/        # analyze_run.py (evaluate + diagnostics + plots in one go),
+│                   # pull_colab_model.py (decode a model pulled from Colab)
+├── docs/           # colab_workflow.md, post_training_cheatsheet.md
 ├── tests/          # unit tests
 ├── environment.yml           # WSL2/conda environment (FEM + PINN authoring)
 ├── requirements-colab.txt    # Colab (GPU) environment (PINN training only)
@@ -132,7 +135,9 @@ as a matching CLI flag automatically (`nx` → `--nx`, `epsilon` → `--epsilon`
 full list. Two flags control where output goes, not the physics:
 
 - `--output-dir PATH` — where the run writes `cahn_hilliard_diagnostics.csv`
-  (t, free_energy, total_mass) and, if `--visualize` is set, `frames/*.png`.
+  (t, free_energy, total_mass), plus `frames/*.png` if `--visualize` is set
+  and `fem_fields.npz` (raw `u`, `mu` on an `nx` x `ny` grid, for PINN-vs-FEM
+  comparison plots) if `--save-fields` is set. Both are on by default.
   **Defaults to `data/` if you don't pass it.**
 - `--overwrite` — required if `--output-dir` already contains a previous
   run's results. **Without a flag at all, the solver refuses to run and
@@ -237,8 +242,9 @@ instead of the baseline (the energy-penalty loss term itself is not
 implemented yet — see Status). Run `--help` for the full flag list:
 domain bounds (`--x-max`/`--y-max`/`--t-max`), point counts
 (`--n-collocation`/`--n-ic`/`--n-bc`/`--pde-at-t0`), network size
-(`--hidden-layers`/`--hidden-width`), and optimizer settings
-(`--lr`, `--lbfgs-steps`).
+(`--hidden-layers`/`--hidden-width`), physics (`--epsilon`), loss weights
+(`--pde-weight`/`--ic-weight`/`--bc-weight`), and optimizer settings
+(`--lr`, `--lbfgs-steps`, plus the early-stopping flags below).
 
 **A note on `--lbfgs-steps`.** It counts *outer* `LBFGS.step(closure)`
 calls, each of which runs up to 20 inner iterations — so the recorded
@@ -293,12 +299,18 @@ writes exactly what it would when invoked by hand:
 ```
 
 Useful flags: `--t 0.0 0.01 0.05` (snapshot times passed to `evaluate`),
-`--device cuda`, and `--fem-diagnostics <path>` to overlay a FEM reference on
-the energy/mass plots:
+`--device cuda`, `--fem-diagnostics <path>` to overlay a FEM reference on
+the energy/mass plots, and `--fem-fields <path>` (a FEM run's `fem_fields.npz`)
+for PINN-vs-FEM comparison plots of u and mu. With `--fem-fields`, the PINN is
+evaluated on that file's grid, so `--nx`/`--ny` match without you setting them:
 
 ```powershell
-.venv\Scripts\python.exe scripts\analyze_run.py demo_run --fem-diagnostics results/eps0.05_nx96_dt2e-4/cahn_hilliard_diagnostics.csv
+.venv\Scripts\python.exe scripts\analyze_run.py demo_run --fem-diagnostics results/eps0.05_nx100_t0.005_compare/cahn_hilliard_diagnostics.csv --fem-fields results/eps0.05_nx100_t0.005_compare/fem_fields.npz
 ```
+
+The default `--t` is `0.0 0.001 0.005`, which only fits runs trained with the
+default `--t-max 0.005`. For a shorter run, pass `--t` values inside its
+window, e.g. `--t 0.0 0.0005 0.001` for a `--t-max 0.001` run.
 
 **Or run the three by hand** — set `$run` once, paste all three. Do this when
 you want flags the wrapper doesn't expose (`--nx`/`--ny` resolution,
@@ -364,8 +376,8 @@ loss history, and/or a diagnostics CSV into saved PNGs (and a text summary):
 .venv\Scripts\python.exe -m src.pinn.plot_results --evaluation results/pinn_models/demo_run/evaluation.npz --checkpoint results/pinn_models/demo_run/final.pt
 ```
 
-`--evaluation`, `--checkpoint`, `--diagnostics`, and `--fem-diagnostics` are
-each optional, but at least one is required — pass several to get everything
+`--evaluation`, `--checkpoint`, `--diagnostics`, `--fem-diagnostics`, and
+`--fem-fields` are each optional, but at least one is required — pass several to get everything
 from one run into one place. If `--diagnostics` is omitted, a
 `diagnostics.csv` inside the inferred run folder is picked up automatically
 when present. **Output**, written under `--output-dir` (defaults to a
@@ -387,9 +399,9 @@ stdout):
   mass vs. time (only if `--diagnostics` and/or `--fem-diagnostics` was
   passed or auto-detected); pass both to overlay PINN against a FEM
   reference (auto-clipped to the PINN's own time window).
-
-- `comparison_<idx>_t<value>.png` — PINN-vs-FEM field comparison, one per
-  evaluation time (only if `--fem-fields` was passed, which also requires
+- `comparison_<idx>_t<value>.png` / `comparison_mu_<idx>_t<value>.png` —
+  PINN-vs-FEM comparison of u and of mu, one of each per evaluation time,
+  matched to the closest FEM snapshot time (only if `--fem-fields` was passed, which also requires
   `--evaluation`). Needs a `fem_fields.npz` from a FEM run with `save_fields`
   on, evaluated on the same `(x, y)` grid — i.e. matching `--nx`/`--ny`.
 
@@ -473,19 +485,32 @@ including the official `colab` CLI as an alternative to notebook cells.
 
 ## Status
 
-Work in progress. The FEM baseline (`src/fem/cahn_hilliard.py`) is working
-end-to-end (mesh, weak form, adaptive time stepping, diagnostics, PNG
-snapshots). `src/pinn/` (model, losses, sampling, training loop) runs
-end-to-end for the baseline PINN — validated so far via
-`notebooks/pinn_CH_imp1.ipynb`, not yet via `src/pinn/train.py` itself on a
-full-length run. `src/pinn/evaluate.py`, `src/pinn/diagnostics.py`, and
-`src/pinn/plot_results.py` load a checkpoint back and produce field/loss/
-energy/mass plots plus a run summary (see above). `src/common/metrics.py`'s
-`free_energy` and `total_mass` (and their shared quadrature,
-`trapezoid_weights_2d`) are implemented and drive `diagnostics.py`; still
-stubs there: `relative_l2_error` and `mass_conservation_error`. Not
-implemented yet: the energy-stability penalty (`energy_stability_loss` —
-passing `--energy-penalty` currently raises `NotImplementedError`), and
-PINN-vs-FEM comparison plots (blocked on raw FEM field arrays, which
-`src/fem/cahn_hilliard.py` doesn't save yet — only PNG frames and scalar
-diagnostics).
+Work in progress.
+
+**Done**
+
+- **FEM baseline** (`src/fem/cahn_hilliard.py`): runs end to end, with mesh,
+  weak form, adaptive time stepping, diagnostics CSV, and PNG snapshots. It
+  also saves raw `(u, mu)` field arrays on a regular grid (`fem_fields.npz`,
+  `save_fields` on by default) for comparing against the PINN.
+- **Baseline PINN** (`src/pinn/`): model, losses (PDE residual, IC, BC),
+  sampling, and the training loop run end to end through `train.py`,
+  including full-length GPU runs on Colab via `notebooks/train_pinn.ipynb`.
+  Optimizer options: Adam with opt-in `ReduceLROnPlateau` and early stopping,
+  then L-BFGS with strong-Wolfe line search and plateau/NaN early stopping.
+- **Post-training analysis**: `evaluate.py`, `diagnostics.py`, and
+  `plot_results.py` (or `scripts/analyze_run.py` to run all three) turn a
+  checkpoint into field, loss, energy, and mass plots plus a run summary, and
+  PINN-vs-FEM field comparison plots for both u and mu (`--fem-fields`).
+- **Metrics** (`src/common/metrics.py`): `free_energy`, `total_mass`, and
+  their shared quadrature `trapezoid_weights_2d`.
+
+**Not implemented yet**
+
+- The energy-stability penalty (`energy_stability_loss` in
+  `src/pinn/losses.py`). Passing `--energy-penalty` currently raises
+  `NotImplementedError`. This blocks research question 1.
+- Transfer learning across time windows (research question 2).
+- `relative_l2_error` and `mass_conservation_error` in
+  `src/common/metrics.py` are still stubs, so PINN-vs-FEM accuracy is only
+  compared visually for now, not as a number.
