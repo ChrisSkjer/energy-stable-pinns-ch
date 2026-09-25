@@ -87,8 +87,12 @@ def plot_comparison(
     c_pinn: np.ndarray,
     c_fem: np.ndarray,
     epsilon: float | None = None,
+    **field_kwargs,
 ):
     """Side-by-side PINN field, FEM field, and their difference, at one time snapshot.
+
+    Extra field_kwargs (vmin, vmax, cmap, colorbar_label) go to plot_field
+    for the PINN and FEM panels, e.g. to plot mu instead of u.
 
     Visual counterpart to metrics.relative_l2_error -- keep both in view
     when writing this one, they should tell the same story two ways.
@@ -103,8 +107,8 @@ def plot_comparison(
     """
     fig, (ax_pinn, ax_fem, ax_diff) = plt.subplots(1, 3, figsize=(13, 4), constrained_layout=True)
 
-    plot_field(x, y, c_pinn, ax=ax_pinn, title="PINN")
-    plot_field(x, y, c_fem, ax=ax_fem, title="FEM")
+    plot_field(x, y, c_pinn, ax=ax_pinn, title="PINN", **field_kwargs)
+    plot_field(x, y, c_fem, ax=ax_fem, title="FEM", **field_kwargs)
 
     diff = c_pinn - c_fem
     # Symmetric bounds around 0, sized to this diff's own range (unlike the

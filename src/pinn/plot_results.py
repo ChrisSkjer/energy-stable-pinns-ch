@@ -198,6 +198,10 @@ def plot_field_comparison(
             "-- re-run src/pinn/evaluate.py with --nx/--ny matching the FEM run's."
         )
 
+    # One shared symmetric mu scale for PINN and FEM, as in plot_evaluation.
+    mu_bound = max(float(np.quantile(np.abs(fem["mu"]), 0.99)), 1e-12)
+    mu_kwargs = dict(vmin=-mu_bound, vmax=mu_bound, cmap="RdBu_r", colorbar_label="mu")
+
     saved = []
     fem_t = fem["t"]
     for idx, t_val in enumerate(pinn["t"]):
@@ -210,6 +214,14 @@ def plot_field_comparison(
             )
         fig, _ = plot_comparison(pinn["x"], pinn["y"], pinn["u"][idx], fem["u"][fem_idx])
         path = os.path.join(output_dir, f"comparison_{idx:03d}_t{t_val:g}.png")
+        fig.savefig(path, dpi=dpi, bbox_inches="tight")
+        plt.close(fig)
+        saved.append(path)
+
+        fig, _ = plot_comparison(
+            pinn["x"], pinn["y"], pinn["mu"][idx], fem["mu"][fem_idx], **mu_kwargs
+        )
+        path = os.path.join(output_dir, f"comparison_mu_{idx:03d}_t{t_val:g}.png")
         fig.savefig(path, dpi=dpi, bbox_inches="tight")
         plt.close(fig)
         saved.append(path)
