@@ -21,7 +21,7 @@ automatically when present.
 PINN vs. FEM field comparison: pass --evaluation together with --fem-fields
 (a fem_fields.npz written by src/fem/cahn_hilliard.py, see its
 _FieldRecorder) to get plotting.plot_comparison PNGs, one per PINN
-evaluation time. Requires both to share the same (x, y) grid, i.e. matching
+evaluation time, plus a relative_l2_error.png of the error over time. Requires both to share the same (x, y) grid, i.e. matching
 --nx/--ny between `python -m src.pinn.evaluate` and the FEM run.
 """
 
@@ -35,6 +35,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+from src.common.metrics import relative_l2_error
 from src.common.plotting import (
     load_diagnostics,
     plot_comparison,
@@ -42,6 +43,7 @@ from src.common.plotting import (
     plot_field,
     plot_loss_history,
     plot_mass_conservation,
+    plot_relative_l2_error,
 )
 from src.pinn.run_paths import infer_run_dir
 from src.pinn.run_summary import format_run_summary
@@ -185,7 +187,11 @@ def plot_field_comparison(
     with matching --nx/--ny between `python -m src.pinn.evaluate` and the
     FEM run otherwise.
 
-    Returns the list of saved PNG paths, in PINN time order.
+    Also saves relative_l2_error.png: metrics.relative_l2_error of u and mu
+    against FEM at each of those same matched times.
+
+    Returns the list of saved PNG paths: comparisons in PINN time order,
+    then the relative L2 error plot.
     """
     pinn = np.load(evaluation_path)
     fem = np.load(fem_fields_path)
@@ -204,6 +210,7 @@ def plot_field_comparison(
 
     saved = []
     fem_t = fem["t"]
+    errors = {"u": np.full(len(pinn["t"]), np.nan), "mu": np.full(len(pinn["t"]), np.nan)}
     for idx, t_val in enumerate(pinn["t"]):
         fem_idx = int(np.argmin(np.abs(fem_t - t_val)))
         matched_t = fem_t[fem_idx]
@@ -225,6 +232,18 @@ def plot_field_comparison(
         fig.savefig(path, dpi=dpi, bbox_inches="tight")
         plt.close(fig)
         saved.append(path)
+
+        for name in errors:
+            try:
+                errors[name][idx] = relative_l2_error(pinn[name][idx], fem[name][fem_idx])
+            except ValueError:
+                pass  # FEM field identically zero here; leave NaN (a gap in the plot)
+
+    ax = plot_relative_l2_error(pinn["t"], errors)
+    path = os.path.join(output_dir, "relative_l2_error.png")
+    ax.figure.savefig(path, dpi=dpi, bbox_inches="tight")
+    plt.close(ax.figure)
+    saved.append(path)
 
     return saved
 

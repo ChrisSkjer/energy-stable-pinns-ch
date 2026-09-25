@@ -78,3 +78,37 @@ def test_total_mass():
     weight = trapezoid_weights_2d(10, 10)
     ones = np.ones((10, 10))
     assert total_mass(ones, weight) == pytest.approx(1.0)
+
+
+def test_relative_l2_error():
+    from src.common.metrics import relative_l2_error
+
+    ref = np.array([[1.0, 2.0], [2.0, 4.0]])  # ||ref||_2 = 5
+    assert relative_l2_error(ref, ref) == 0.0
+    assert relative_l2_error(ref + np.array([[0.5, 0], [0, 0]]), ref) == pytest.approx(0.1)
+    # scale-invariant
+    assert relative_l2_error(10 * (ref + 0.1), 10 * ref) == pytest.approx(
+        relative_l2_error(ref + 0.1, ref)
+    )
+
+
+def test_relative_l2_error_rejects_bad_input():
+    from src.common.metrics import relative_l2_error
+
+    with pytest.raises(ValueError):
+        relative_l2_error(np.zeros((4, 4)), np.zeros((4, 5)))
+    with pytest.raises(ValueError):
+        relative_l2_error(np.ones((4, 4)), np.zeros((4, 4)))
+
+
+def test_mass_conservation_error():
+    from src.common.metrics import mass_conservation_error, trapezoid_weights_2d
+
+    weight = trapezoid_weights_2d(10, 10)
+    c_0 = np.linspace(-1, 1, 100).reshape(10, 10)
+    assert mass_conservation_error(c_0, c_0, weight) == 0.0
+    # uniform shift by delta on the unit square changes mass by exactly delta,
+    # and the error is unsigned
+    assert mass_conservation_error(c_0 - 0.02, c_0, weight) == pytest.approx(0.02)
+    with pytest.raises(ValueError):
+        mass_conservation_error(c_0, c_0[:5], weight)

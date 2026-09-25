@@ -502,8 +502,9 @@ Work in progress.
   `plot_results.py` (or `scripts/analyze_run.py` to run all three) turn a
   checkpoint into field, loss, energy, and mass plots plus a run summary, and
   PINN-vs-FEM field comparison plots for both u and mu (`--fem-fields`).
-- **Metrics** (`src/common/metrics.py`): `free_energy`, `total_mass`, and
-  their shared quadrature `trapezoid_weights_2d`.
+- **Metrics** (`src/common/metrics.py`): `free_energy`, `total_mass`,
+  `relative_l2_error`, `mass_conservation_error`, and their shared
+  quadrature `trapezoid_weights_2d`.
 
 **Not implemented yet**
 
@@ -511,6 +512,3 @@ Work in progress.
   `src/pinn/losses.py`). Passing `--energy-penalty` currently raises
   `NotImplementedError`. This blocks research question 1.
 - Transfer learning across time windows (research question 2).
-- `relative_l2_error` and `mass_conservation_error` in
-  `src/common/metrics.py` are still stubs, so PINN-vs-FEM accuracy is only
-  compared visually for now, not as a number.

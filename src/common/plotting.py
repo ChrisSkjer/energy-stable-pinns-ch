@@ -15,6 +15,8 @@ from __future__ import annotations
 import matplotlib.pyplot as plt
 import numpy as np
 
+from src.common.metrics import relative_l2_error
+
 
 def phase_colormap():
     """Diverging blue<->red colormap for c/u in [-1, 1], neutral gray at 0.
@@ -94,8 +96,8 @@ def plot_comparison(
     Extra field_kwargs (vmin, vmax, cmap, colorbar_label) go to plot_field
     for the PINN and FEM panels, e.g. to plot mu instead of u.
 
-    Visual counterpart to metrics.relative_l2_error -- keep both in view
-    when writing this one, they should tell the same story two ways.
+    Visual counterpart to metrics.relative_l2_error, whose value is shown
+    in the difference panel's title so each figure carries its own number.
 
     x, y, c_fem come from a FEM run's fem_fields.npz (see
     src/fem/cahn_hilliard.py::_FieldRecorder); c_pinn from a PINN run's
@@ -122,12 +124,51 @@ def plot_comparison(
     ax_diff.set_aspect("equal")
     ax_diff.set_xlabel("x")
     ax_diff.set_ylabel("y")
-    ax_diff.set_title("PINN - FEM")
+    try:
+        rel_l2 = relative_l2_error(c_pinn, c_fem)
+        ax_diff.set_title(f"PINN - FEM  (rel. L2 = {rel_l2:.2%})")
+    except ValueError:
+        # FEM field is identically zero -- relative error undefined.
+        ax_diff.set_title("PINN - FEM")
 
     if epsilon is not None:
         fig.suptitle(f"epsilon = {epsilon:g}")
 
     return fig, (ax_pinn, ax_fem, ax_diff)
+
+
+def plot_relative_l2_error(
+    t: np.ndarray,
+    errors: dict[str, np.ndarray],
+    ax=None,
+):
+    """Plot PINN-vs-FEM relative L2 error (metrics.relative_l2_error) over time.
+
+    Args:
+        t: (nt,) evaluation times.
+        errors: field name -> (nt,) relative L2 errors at those times, e.g.
+            {"u": err_u, "mu": err_mu}. NaN entries (error undefined at that
+            time) are left as gaps in the curve.
+        ax: existing matplotlib axes to draw on, or None to create a new figure.
+
+    Log-scale y axis: PINN error typically grows by orders of magnitude over
+    the time window, and this is where that shows up -- the energy and mass
+    curves can look fine while the field itself has drifted from FEM.
+
+    Returns:
+        The axes drawn on.
+    """
+    if ax is None:
+        _, ax = plt.subplots()
+
+    for name, err in errors.items():
+        ax.semilogy(t, err, lw=2, marker="o", ms=4, label=name)
+    ax.set_xlabel("t")
+    ax.set_ylabel(r"relative L2 error  $\|f_{PINN} - f_{FEM}\|_2 / \|f_{FEM}\|_2$")
+    ax.set_title("PINN vs. FEM relative L2 error")
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend()
+    return ax
 
 
 def plot_loss_history(history: dict[str, list[float]], ax=None):

@@ -20,8 +20,17 @@ def relative_l2_error(prediction: np.ndarray, reference: np.ndarray) -> float:
     Returns:
         ||prediction - reference||_2 / ||reference||_2.
     """
-    # TODO: flatten inputs as needed and compute the relative L2 norm
-    raise NotImplementedError
+    prediction = np.asarray(prediction, dtype=np.float64)
+    reference = np.asarray(reference, dtype=np.float64)
+    if prediction.shape != reference.shape:
+        raise ValueError(
+            f"prediction shape {prediction.shape} does not match "
+            f"reference shape {reference.shape}"
+        )
+    ref_norm = np.linalg.norm(reference.ravel())
+    if ref_norm == 0.0:
+        raise ValueError("reference has zero L2 norm; relative error is undefined")
+    return float(np.linalg.norm((prediction - reference).ravel()) / ref_norm)
 
 
 def trapezoid_weights_2d(
@@ -109,12 +118,17 @@ def total_mass(c: np.ndarray, weight: np.ndarray | float) -> float:
     return float(np.sum(np.asarray(c, dtype=np.float64) * weight))
 
 
-def mass_conservation_error(c_t: np.ndarray, c_0: np.ndarray) -> float:
+def mass_conservation_error(
+    c_t: np.ndarray, c_0: np.ndarray, weight: np.ndarray | float
+) -> float:
     """Deviation of total mass (integral of c) at time t from its initial value.
 
     Args:
         c_t: phase-field values at time t.
-        c_0: phase-field values at t=0.
+        c_0: phase-field values at t=0, on the same grid as c_t.
+        weight: quadrature weights broadcastable to c_t.shape, e.g. from
+            trapezoid_weights_2d. Required for the same reason as in
+            total_mass: without it the "mass" is a grid-size-dependent sum.
 
     Returns:
         Absolute difference in total mass between c_t and c_0.
@@ -124,5 +138,8 @@ def mass_conservation_error(c_t: np.ndarray, c_0: np.ndarray) -> float:
     src/pinn/diagnostics.py) instead -- that's computed via total_mass()
     above, not this function.
     """
-    # TODO: implement mass integral and compare
-    raise NotImplementedError
+    if np.shape(c_t) != np.shape(c_0):
+        raise ValueError(
+            f"c_t shape {np.shape(c_t)} does not match c_0 shape {np.shape(c_0)}"
+        )
+    return abs(total_mass(c_t, weight) - total_mass(c_0, weight))
