@@ -48,7 +48,7 @@ the run name typed once. It changes no defaults.
 | `--t T [T ...]` | `0.0 0.001 0.005` | Snapshot times; must be inside the trained `[0, t_max]` |
 | `--device` | `cpu` | `cuda` if you're running this on Colab |
 | `--fem-diagnostics PATH` | none | Overlays a FEM reference on the energy/mass plots |
-| `--fem-fields PATH` | none | PINN-vs-FEM comparison plots of u and mu; evaluates on the FEM file's grid, so `--nx`/`--ny` match automatically |
+| `--fem-fields PATH` | none | PINN-vs-FEM comparison plots of u and mu, plus relative L2 error vs. t; evaluates on the FEM file's grid, so `--nx`/`--ny` match automatically |
 
 ```powershell
 .venv\Scripts\python.exe scripts\analyze_run.py $run --fem-diagnostics results/eps0.05_nx96_dt2e-4/cahn_hilliard_diagnostics.csv
@@ -118,7 +118,7 @@ to get everything in one folder.
 | `--checkpoint <pt>` | `loss_history.png` + `run_summary.txt` |
 | `--diagnostics <csv>` | `energy_dissipation.png`, `mass_conservation.png` |
 | `--fem-diagnostics <csv>` | FEM reference overlaid on those same two plots |
-| `--fem-fields <npz>` | `comparison_<idx>_t<val>.png` + `comparison_mu_<idx>_t<val>.png` — requires `--evaluation` |
+| `--fem-fields <npz>` | `comparison_<idx>_t<val>.png` + `comparison_mu_<idx>_t<val>.png` (relative L2 error in the diff panel's title), and `relative_l2_error.png` — requires `--evaluation` |
 | `--output-dir` | defaults to `plots/` inside the inferred run folder |
 | `--dpi` | `150` |
 
@@ -172,6 +172,21 @@ Requirements, all of which will bite otherwise:
   `1e-9` emits a warning naming both times. FEM snapshot spacing is
   `--viz-every` steps.
 
+Besides one comparison PNG per time, this writes `relative_l2_error.png`:
+`metrics.relative_l2_error` (‖PINN − FEM‖₂ / ‖FEM‖₂) for u and mu against t,
+on a log axis. Same number as in each comparison's diff-panel title. Reading it:
+
+- It's scale-free — read it as a percentage of the FEM field's size. With u ≈
+  ±1, 0.01 means an RMS error of about 0.01.
+- Flat is good; a steady climb means the PINN error builds up over time.
+  Where it crosses ~10% is roughly where the PINN stops being trustworthy.
+- mu sitting well above u: phase layout right, chemical potential (higher
+  derivatives) off.
+- One point per `--t` value only — and since an unmatched time is compared
+  against the *closest* FEM snapshot, extra `--t` values between snapshots
+  give misleading points, not a smoother curve. For more points, re-run FEM
+  with a smaller `--viz-every` and evaluate the PINN at those same times.
+
 Generating the FEM reference is a WSL/`fenicsx-env` job (see README "Running
 the FEM baseline"):
 
@@ -196,7 +211,8 @@ results/pinn_models/<run-name>/
     ├── run_summary.txt
     ├── energy_dissipation.png
     ├── mass_conservation.png
-    └── comparison_000_t0.png, comparison_mu_000_t0.png ...   # only with --fem-fields
+    ├── comparison_000_t0.png, comparison_mu_000_t0.png ...   # only with --fem-fields
+    └── relative_l2_error.png                                  # only with --fem-fields
 ```
 
 ## Gotchas
