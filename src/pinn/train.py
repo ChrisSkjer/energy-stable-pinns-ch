@@ -13,7 +13,14 @@ import os
 
 import torch
 
-from src.pinn.losses import DEFAULT_EPSILON, bc_loss, energy_stability_loss, ic_loss, pde_residual_loss
+from src.pinn.losses import (
+    DEFAULT_EPSILON,
+    bc_loss,
+    energy_stability_loss,
+    ic_loss,
+    pde_mu_residual_loss,
+    pde_u_residual_loss,
+)
 from src.pinn.model import PINN
 from src.pinn.run_paths import checkpoints_dir_for, final_path_for, run_dir_for
 from src.pinn.sampling import TrainingPoints, sample_points
@@ -80,7 +87,18 @@ def parse_args() -> argparse.Namespace:
         "Omit for the baseline PINN.",
     )
     parser.add_argument("--energy-weight", type=float, default=1.0)
-    parser.add_argument("--pde-weight", type=float, default=1.0, help="Weight on the PDE residual loss term")
+    parser.add_argument(
+        "--pde-u-weight",
+        type=float,
+        default=1.0,
+        help="Weight on the u-equation PDE residual, m*laplacian(mu) - u_t",
+    )
+    parser.add_argument(
+        "--pde-mu-weight",
+        type=float,
+        default=1.0,
+        help="Weight on the mu-equation PDE residual, mu - f'(u) + eps^2*laplacian(u)",
+    )
     parser.add_argument("--ic-weight", type=float, default=100, help="Weight on the initial-condition loss term")
     parser.add_argument("--bc-weight", type=float, default=10, help="Weight on the boundary-condition loss term")
     parser.add_argument(
@@ -178,7 +196,8 @@ def train(args: argparse.Namespace) -> None:
 
     def compute_loss(points: TrainingPoints) -> dict[str, torch.Tensor]:
         losses = {
-            "pde": args.pde_weight * pde_residual_loss(model, points.collocation, epsilon=args.epsilon),
+            "pde_u": args.pde_u_weight * pde_u_residual_loss(model, points.collocation, epsilon=args.epsilon),
+            "pde_mu": args.pde_mu_weight * pde_mu_residual_loss(model, points.collocation, epsilon=args.epsilon),
             "ic": args.ic_weight * ic_loss(model, points.ic_points, points.ic_values),
             "bc": args.bc_weight * bc_loss(model, points.bc_points),
         }
@@ -300,7 +319,7 @@ def save_checkpoint(
     """Save model weights plus the metadata needed to reload them.
 
     Bundling `args` (the exact CLI flags this run used) and `history` (each
-    weighted loss component -- "pde", "ic", "bc", "total", and "energy" when
+    weighted loss component -- "pde_u", "pde_mu", "ic", "bc", "total", and "energy" when
     --energy-penalty is enabled -- per optimizer step) alongside the weights
     means evaluate.py can reconstruct the right architecture and domain
     bounds on its own instead of having them re-supplied by hand -- and the

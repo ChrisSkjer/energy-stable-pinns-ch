@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 .ipynb_checkpoints/
+tensortest.ipynb
 
 # Trained model weights (regenerable; keep latest checkpoint locally only)
 *.pt

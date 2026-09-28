@@ -243,7 +243,7 @@ implemented yet — see Status). Run `--help` for the full flag list:
 domain bounds (`--x-max`/`--y-max`/`--t-max`), point counts
 (`--n-collocation`/`--n-ic`/`--n-bc`/`--pde-at-t0`), network size
 (`--hidden-layers`/`--hidden-width`), physics (`--epsilon`), loss weights
-(`--pde-weight`/`--ic-weight`/`--bc-weight`), and optimizer settings
+(`--pde-u-weight`/`--pde-mu-weight`/`--ic-weight`/`--bc-weight`), and optimizer settings
 (`--lr`, `--lbfgs-steps`, plus the early-stopping flags below).
 
 **A note on `--lbfgs-steps`.** It counts *outer* `LBFGS.step(closure)`

@@ -28,7 +28,11 @@ _RUN_SUMMARY_GROUPS: list[tuple[str, tuple[str, ...]]] = [
             "lbfgs_patience",
         ),
     ),
-    ("loss weights", ("pde_weight", "ic_weight", "bc_weight", "energy_penalty", "energy_weight")),
+    (
+        "loss weights",
+        # pde_weight is kept for checkpoints from before the PDE u/mu split.
+        ("pde_weight", "pde_u_weight", "pde_mu_weight", "ic_weight", "bc_weight", "energy_penalty", "energy_weight"),
+    ),
 ]
 
 # Bookkeeping/control flags that don't describe the model or the loss --
@@ -43,7 +47,7 @@ _RUN_SUMMARY_EXCLUDED = {"run_name", "device", "smoke_test", "checkpoint_every",
 _STATE_DICT_BUFFERS = frozenset({"lower_bound", "upper_bound"})
 
 # Order to print "final <term>" lines in, when present in history.
-_LOSS_TERM_ORDER = ("pde", "ic", "bc", "energy", "total")
+_LOSS_TERM_ORDER = ("pde", "pde_u", "pde_mu", "ic", "bc", "energy", "total")
 
 
 def count_parameters(model_state: Mapping[str, Any]) -> int:

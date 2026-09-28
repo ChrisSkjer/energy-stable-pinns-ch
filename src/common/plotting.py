@@ -178,9 +178,10 @@ def plot_loss_history(history: dict[str, list[float]], ax=None):
         history: dict of per-component loss histories, e.g. the "history"
             dict bundled into a checkpoint by
             src/pinn/train.py::save_checkpoint (read via
-            torch.load(checkpoint_path)["history"]). Keys are "pde", "ic",
-            "bc", "total", and "energy" when --energy-penalty was enabled
-            for that run; each component's values already include its
+            torch.load(checkpoint_path)["history"]). Keys are "pde_u",
+            "pde_mu", "ic", "bc", "total", and "energy" when
+            --energy-penalty was enabled for that run (checkpoints from
+            before the PDE split have a single "pde" key instead); each component's values already include its
             --*-weight multiplier, i.e. these are the same numbers
             train.py prints during training, not the raw unweighted terms.
             Adam and L-BFGS steps are appended to the same flat lists, so
@@ -197,7 +198,7 @@ def plot_loss_history(history: dict[str, list[float]], ax=None):
     if ax is None:
         _, ax = plt.subplots()
 
-    for name in ("pde", "ic", "bc", "energy"):
+    for name in ("pde", "pde_u", "pde_mu", "ic", "bc", "energy"):
         if name in history:
             ax.semilogy(history[name], lw=1.5, alpha=0.8, label=name)
     if "total" in history:

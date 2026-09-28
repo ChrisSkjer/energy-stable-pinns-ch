@@ -32,7 +32,8 @@ _ARGS = {
     "y_max": 1.0,
     "t_max": 0.005,
     "epsilon": 0.01,
-    "pde_weight": 1.0,
+    "pde_u_weight": 1.0,
+    "pde_mu_weight": 1.0,
     "ic_weight": 1.0,
     "bc_weight": 1.0,
     "energy_penalty": False,
@@ -71,7 +72,8 @@ def test_format_run_summary_with_model_and_history():
     )
     smoke_args = dict(_ARGS, smoke_test=True)
     history = {
-        "pde": [1.0, 0.5, 0.1, 0.05, 0.01],
+        "pde_u": [1.0, 0.5, 0.1, 0.05, 0.01],
+        "pde_mu": [0.2, 0.1, 0.05, 0.02, 0.01],
         "ic": [1.0, 0.9, 0.8, 0.7, 0.6],
         "bc": [0.5, 0.4, 0.3, 0.2, 0.1],
         "total": [2.5, 1.8, 1.2, 0.95, 0.71],
@@ -84,3 +86,5 @@ def test_format_run_summary_with_model_and_history():
     assert "source: checkpoint.pt" in text
     assert "adam steps: 5" in text
     assert "final total: 7.100000e-01" in text
+    assert "final pde_mu: 1.000000e-02" in text
+    assert "pde_mu_weight: 1.0" in text
