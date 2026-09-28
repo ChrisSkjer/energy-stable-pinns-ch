@@ -96,7 +96,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--pde-mu-weight",
         type=float,
-        default=1.0,
+        default=100.0,
         help="Weight on the mu-equation PDE residual, mu - f'(u) + eps^2*laplacian(u)",
     )
     parser.add_argument("--ic-weight", type=float, default=100, help="Weight on the initial-condition loss term")
