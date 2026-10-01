@@ -18,8 +18,7 @@ from src.pinn.losses import (
     bc_loss,
     energy_stability_loss,
     ic_loss,
-    pde_mu_residual_loss,
-    pde_u_residual_loss,
+    pde_residual_losses,
 )
 from src.pinn.model import PINN
 from src.pinn.run_paths import checkpoints_dir_for, final_path_for, run_dir_for
@@ -195,9 +194,10 @@ def train(args: argparse.Namespace) -> None:
     )
 
     def compute_loss(points: TrainingPoints) -> dict[str, torch.Tensor]:
+        loss_pde_u, loss_pde_mu = pde_residual_losses(model, points.collocation, epsilon=args.epsilon)
         losses = {
-            "pde_u": args.pde_u_weight * pde_u_residual_loss(model, points.collocation, epsilon=args.epsilon),
-            "pde_mu": args.pde_mu_weight * pde_mu_residual_loss(model, points.collocation, epsilon=args.epsilon),
+            "pde_u": args.pde_u_weight * loss_pde_u,
+            "pde_mu": args.pde_mu_weight * loss_pde_mu,
             "ic": args.ic_weight * ic_loss(model, points.ic_points, points.ic_values),
             "bc": args.bc_weight * bc_loss(model, points.bc_points),
         }

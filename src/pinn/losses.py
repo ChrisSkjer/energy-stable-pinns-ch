@@ -18,65 +18,57 @@ from torch import nn
 DEFAULT_EPSILON = 0.05
 
 
-def pde_u_residual_loss(model: nn.Module, collocation_points: torch.Tensor, epsilon = DEFAULT_EPSILON, m = 1.0) -> torch.Tensor:
-    """Residual of the u-equation of the Cahn-Hilliard PDE (mixed u/mu
-    formulation), u_t = m * laplacian(mu), at collocation points, via
-    automatic differentiation.
+def pde_residual_losses(model: nn.Module, collocation_points: torch.Tensor, epsilon = DEFAULT_EPSILON, m = 1.0) -> tuple[torch.Tensor, torch.Tensor]:
+    """Residuals of both equations of the Cahn-Hilliard PDE (mixed u/mu
+    formulation), at collocation points, via automatic differentiation:
 
-    Args:
-        model: the PINN.
-        collocation_points: (N, input_dim) interior points, requires_grad=True.
-        epsilon: unused here; kept so both PDE losses share a signature.
-        m: mobility.
+        u-equation:  u_t = m * laplacian(mu)
+        mu-equation: mu = f'(u) - epsilon^2 * laplacian(u)
 
-    Returns:
-        Scalar MSE of the u-equation residual.
-    """
-    out = model(collocation_points)
-    u, mu = out[:,0:1], out[:,1:2]
-
-    u_t = torch.autograd.grad(u, collocation_points, grad_outputs=torch.ones_like(u), create_graph=True)[0][:, 2:3]
-
-    mu_x = torch.autograd.grad(mu, collocation_points, grad_outputs=torch.ones_like(mu), create_graph=True)[0][:, 0:1]
-    mu_y = torch.autograd.grad(mu, collocation_points, grad_outputs=torch.ones_like(mu), create_graph=True)[0][:, 1:2]
-    mu_xx = torch.autograd.grad(mu_x, collocation_points, grad_outputs=torch.ones_like(mu_x), create_graph=True)[0][:, 0:1]
-    mu_yy = torch.autograd.grad(mu_y, collocation_points, grad_outputs=torch.ones_like(mu_y), create_graph=True)[0][:, 1:2]
-
-    residual_u = m * (mu_xx + mu_yy) - u_t
-    loss_pde_u = torch.mean(residual_u**2)
-
-    return loss_pde_u
-
-
-def pde_mu_residual_loss(model: nn.Module, collocation_points: torch.Tensor, epsilon = DEFAULT_EPSILON, m = 1.0) -> torch.Tensor:
-    """Residual of the mu-equation of the Cahn-Hilliard PDE (mixed u/mu
-    formulation), mu = f'(u) - epsilon^2 * laplacian(u), at collocation
-    points, via automatic differentiation.
+    Computed together so the forward pass and the first derivatives of u
+    and mu are shared between the two residuals.
 
     Args:
         model: the PINN.
         collocation_points: (N, input_dim) interior points, requires_grad=True.
         epsilon: interface half-width.
-        m: unused here; kept so both PDE losses share a signature.
+        m: mobility.
 
     Returns:
-        Scalar MSE of the mu-equation residual.
+        (loss_pde_u, loss_pde_mu): scalar MSEs of the u- and mu-equation residuals.
     """
     out = model(collocation_points)
     u, mu = out[:,0:1], out[:,1:2]
 
-    u_x = torch.autograd.grad(u, collocation_points, grad_outputs=torch.ones_like(u), create_graph=True)[0][:, 0:1]
-    u_y = torch.autograd.grad(u, collocation_points, grad_outputs=torch.ones_like(u), create_graph=True)[0][:, 1:2]
+    grad_u = torch.autograd.grad(u, collocation_points, grad_outputs=torch.ones_like(u), create_graph=True)[0]
+    grad_mu = torch.autograd.grad(mu, collocation_points, grad_outputs=torch.ones_like(mu), create_graph=True)[0]
+    u_x, u_y, u_t = grad_u[:, 0:1], grad_u[:, 1:2], grad_u[:, 2:3]
+    mu_x, mu_y = grad_mu[:, 0:1], grad_mu[:, 1:2]
+
     u_xx = torch.autograd.grad(u_x, collocation_points, grad_outputs=torch.ones_like(u_x), create_graph=True)[0][:, 0:1]
     u_yy = torch.autograd.grad(u_y, collocation_points, grad_outputs=torch.ones_like(u_y), create_graph=True)[0][:, 1:2]
+    mu_xx = torch.autograd.grad(mu_x, collocation_points, grad_outputs=torch.ones_like(mu_x), create_graph=True)[0][:, 0:1]
+    mu_yy = torch.autograd.grad(mu_y, collocation_points, grad_outputs=torch.ones_like(mu_y), create_graph=True)[0][:, 1:2]
 
-    #f = 1/4 * (u**2 - 1)**2
+    residual_u = m * (mu_xx + mu_yy) - u_t
+
+    #f = 1/4 * (u**2 - 1)**2 dobbel well
     f_u = (u**2 - 1) * u
-
     residual_mu = mu - f_u + epsilon**2 * (u_xx + u_yy)
-    loss_pde_mu = torch.mean(residual_mu**2)
 
-    return loss_pde_mu
+    return torch.mean(residual_u**2), torch.mean(residual_mu**2)
+
+
+def pde_u_residual_loss(model: nn.Module, collocation_points: torch.Tensor, epsilon = DEFAULT_EPSILON, m = 1.0) -> torch.Tensor:
+    """u-equation residual loss only; see `pde_residual_losses`. Training
+    should call `pde_residual_losses` directly to avoid duplicate work."""
+    return pde_residual_losses(model, collocation_points, epsilon=epsilon, m=m)[0]
+
+
+def pde_mu_residual_loss(model: nn.Module, collocation_points: torch.Tensor, epsilon = DEFAULT_EPSILON, m = 1.0) -> torch.Tensor:
+    """mu-equation residual loss only; see `pde_residual_losses`. Training
+    should call `pde_residual_losses` directly to avoid duplicate work."""
+    return pde_residual_losses(model, collocation_points, epsilon=epsilon, m=m)[1]
 
 
 def ic_loss(
