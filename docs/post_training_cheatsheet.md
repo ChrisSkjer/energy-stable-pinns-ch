@@ -191,8 +191,12 @@ Generating the FEM reference is a WSL/`fenicsx-env` job (see README "Running
 the FEM baseline"):
 
 ```bash
-python src/fem/cahn_hilliard.py --output-dir results/eps0.05_nx96_dt2e-4 --epsilon 0.05 --nx 96 --ny 96
+python -m src.fem.cahn_hilliard --output-dir results/eps0.05_nx96_dt2e-4 --epsilon 0.05 --nx 96 --ny 96
 ```
+
+Use the same `--ic` as the PINN run (its value is in the run summary). For
+`--ic noise`, the FEM `--seed` must also equal the PINN `--ic-seed`. Both
+default to 42.
 
 ## Output map
 

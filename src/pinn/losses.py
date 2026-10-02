@@ -10,7 +10,7 @@ import torch
 from torch import nn
 
 # Cahn-Hilliard interface half-width. This is the single source of truth for
-# epsilon: `sampling.cross_initial_condition` imports it so the initial
+# epsilon: `sampling.sample_points` defaults to it so the initial-condition
 # profile stays consistent with the PDE residual (a mismatch here puts the
 # IC out of equilibrium and forces the network to resolve a stiff transient
 # at t = 0). Pass `epsilon` explicitly through `train.py` rather than
@@ -82,7 +82,7 @@ def ic_loss(
         model: the PINN.
         ic_points: (N_ic, input_dim) points at t=0.
         ic_values: (N_ic, 1) target u values at ic_points -- the u channel
-            only, matching `sampling.cross_initial_condition`. There is no
+            only, from `src.common.initial_conditions`. There is no
             target for mu here: its t=0 value is not free to choose, it is
             fixed by the IC through mu = f'(u0) - eps^2 * laplacian(u0).
 

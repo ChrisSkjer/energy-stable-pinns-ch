@@ -31,6 +31,8 @@ from dolfinx.fem import Constant, Function, assemble_scalar, form, functionspace
 from dolfinx.fem.petsc import NonlinearProblem
 from dolfinx.mesh import CellType, create_unit_square
 
+from src.common.initial_conditions import INITIAL_CONDITIONS, initial_condition
+
 try:
     import pyvista as pv
 
@@ -79,7 +81,8 @@ class CahnHilliardConfig:
     t_final: float = 0.1  # ~50*tau, enough for full separation at epsilon=0.05
     theta: float = 0.5  # Crank-Nicolson parameter
     log_every: int = 5  # write diagnostics every N time steps
-    seed: int = 42  # random seed for the initial condition
+    ic: str = "cross"  # initial condition, see src/common/initial_conditions.py
+    seed: int = 42  # random seed for the initial condition (used by ic="noise")
     visualize: bool = True  # save concentration-field PNG frames
     viz_every: int = 5  # save a frame every N time steps (if visualize)
     show_gridpoints: bool = False  # overlay mesh vertices on the solution frames
@@ -301,65 +304,6 @@ def build_function_space(mesh):
     return functionspace(mesh, mixed_element([P1, P1]))
 
 
-# --- "Swiss flag" cross initial condition ----------------------------------
-# Proportions follow the Swiss flag: arms 6 units wide and 20 units long on a
-# 32-unit square, rescaled to the unit square. That gives an area fraction of
-# ~0.199, i.e. a limiting circle of radius sqrt(0.199/pi) ~ 0.25.
-_IC_ARM_HALF_W = (6.0 / 32.0) / 2.0  # half-width of an arm  = 0.09375
-_IC_ARM_HALF_L = (20.0 / 32.0) / 2.0  # half-length of an arm = 0.3125
-_IC_CENTER = (0.5, 0.5)
-
-
-def _rect_sdf(px, py, half_w, half_h):
-    """Exact signed distance to an axis-aligned rectangle centred at the
-    origin, negative inside. The usual 2D box SDF: the first term measures the
-    distance once outside, the second is the (negative) distance to the nearest
-    edge while inside."""
-    qx = np.abs(px) - half_w
-    qy = np.abs(py) - half_h
-    outside = np.sqrt(np.maximum(qx, 0.0) ** 2 + np.maximum(qy, 0.0) ** 2)
-    inside = np.minimum(np.maximum(qx, qy), 0.0)
-    return outside + inside
-
-
-def _cross_sdf(xx, yy):
-    """Signed distance to the cross, i.e. the union of a horizontal and a
-    vertical bar. A union of SDFs is min(...): exact outside the cross, and a
-    slight under-estimate only in the small pocket near the re-entrant corners
-    -- harmless once it is squashed through a tanh."""
-    px = xx - _IC_CENTER[0]
-    py = yy - _IC_CENTER[1]
-    horizontal = _rect_sdf(px, py, _IC_ARM_HALF_L, _IC_ARM_HALF_W)
-    vertical = _rect_sdf(px, py, _IC_ARM_HALF_W, _IC_ARM_HALF_L)
-    return np.minimum(horizontal, vertical)
-
-
-def _cross_initial_condition(epsilon: float):
-    """Swiss-flag cross: c = +1 on the cross, c = -1 on the background, joined
-    by the equilibrium Cahn-Hilliard interface profile
-
-        c = -tanh(d / (sqrt(2) epsilon)),
-
-    where d is the signed distance to the cross boundary (negative inside).
-    Matches `CH_initial_condition` in notebooks/pinn_CH_imp1.ipynb, so the FEM
-    run is a ground truth for that PINN.
-
-    Using the solver's own epsilon means the interface starts at its preferred
-    width, so there is no fast thickening transient at t = 0 and the early
-    dynamics are pure curvature-driven motion: the four re-entrant corners fill
-    in, the arm tips retract, and the cross relaxes towards a circle of the same
-    area (CH conserves mass, so the area is preserved).
-
-    The cross sits well clear of the walls, so c is flat there and the profile
-    is consistent with the no-flux boundary conditions.
-    """
-
-    def ic(x):
-        return -np.tanh(_cross_sdf(x[0], x[1]) / (np.sqrt(2.0) * epsilon))
-
-    return ic
-
-
 def solve(
     config: CahnHilliardConfig, output_dir: str = "data", overwrite: bool = False
 ) -> Path:
@@ -385,6 +329,11 @@ def solve(
     Returns:
         Path to the diagnostics CSV log (t, free_energy, total_mass).
     """
+    if config.ic not in INITIAL_CONDITIONS:
+        raise ValueError(
+            f"unknown initial condition {config.ic!r}; choose from {sorted(INITIAL_CONDITIONS)}"
+        )
+
     existing_log = Path(output_dir) / "cahn_hilliard_diagnostics.csv"
     if existing_log.exists() and not overwrite:
         raise FileExistsError(
@@ -441,7 +390,14 @@ def solve(
     c, mu = ufl.split(u)
     c0, mu0 = ufl.split(u0)
 
-    u.sub(0).interpolate(_cross_initial_condition(config.epsilon))
+    # Shared with the PINN (src/pinn/sampling.py), so both start from the same
+    # field. The tanh-profile ICs use the solver's own epsilon, so the
+    # interface starts at its equilibrium width.
+    u.sub(0).interpolate(
+        lambda x: initial_condition(
+            config.ic, x[0], x[1], epsilon=config.epsilon, seed=config.seed
+        )
+    )
     u.x.scatter_forward()
 
     c = ufl.variable(c)

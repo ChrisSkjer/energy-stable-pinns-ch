@@ -13,6 +13,7 @@ import os
 
 import torch
 
+from src.common.initial_conditions import INITIAL_CONDITIONS
 from src.pinn.losses import (
     DEFAULT_EPSILON,
     bc_loss,
@@ -107,6 +108,24 @@ def parse_args() -> argparse.Namespace:
         help="Cahn-Hilliard interface half-width, used for both the PDE "
         "residual and the initial-condition profile.",
     )
+    parser.add_argument(
+        "--ic",
+        type=str,
+        default="cross",
+        choices=sorted(INITIAL_CONDITIONS),
+        help="Initial condition (see src/common/initial_conditions.py): "
+        "'cross' (Swiss-flag cross relaxing to a circle), 'two_circles' "
+        "(coarsening, the small circle feeds the big one), 'noise' (smooth "
+        "random perturbation, spinodal decomposition). Use the same --ic for "
+        "the FEM ground truth.",
+    )
+    parser.add_argument(
+        "--ic-seed",
+        type=int,
+        default=42,
+        help="Random seed for --ic noise; must match the FEM --seed (default 42 "
+        "on both) for a valid comparison.",
+    )
     parser.add_argument("--x-max", type=float, default=1.0, help="Domain upper bound in x (lower is 0)")
     parser.add_argument("--y-max", type=float, default=1.0, help="Domain upper bound in y (lower is 0)")
     parser.add_argument("--t-max", type=float, default=5e-3, help="Domain upper bound in t (lower is 0)")
@@ -191,6 +210,8 @@ def train(args: argparse.Namespace) -> None:
         device=device,
         pde_at_t0=args.pde_at_t0,
         epsilon=args.epsilon,
+        ic=args.ic,
+        ic_seed=args.ic_seed,
     )
 
     def compute_loss(points: TrainingPoints) -> dict[str, torch.Tensor]:

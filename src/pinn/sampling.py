@@ -9,16 +9,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import numpy as np
 import torch
 
+from src.common.initial_conditions import initial_condition
 from src.pinn.losses import DEFAULT_EPSILON
-
-# "Swiss flag" cross proportions: arms 6 units wide and 20 units long on a
-# 32-unit square, rescaled to the unit square.
-_IC_ARM_HALF_W = (6.0 / 32.0) / 2.0
-_IC_ARM_HALF_L = (20.0 / 32.0) / 2.0
-_IC_CENTER = (0.5, 0.5)
 
 
 @dataclass
@@ -38,40 +32,6 @@ class TrainingPoints:
     bc_points: torch.Tensor
 
 
-def _rect_sdf(px: torch.Tensor, py: torch.Tensor, half_w: float, half_h: float) -> torch.Tensor:
-    """Signed distance to an axis-aligned rectangle centred at the origin, negative inside."""
-    qx = px.abs() - half_w
-    qy = py.abs() - half_h
-    outside = torch.sqrt(qx.clamp(min=0.0) ** 2 + qy.clamp(min=0.0) ** 2)
-    inside = torch.maximum(qx, qy).clamp(max=0.0)
-    return outside + inside
-
-
-def _cross_sdf(xx: torch.Tensor, yy: torch.Tensor) -> torch.Tensor:
-    """Signed distance to the union of a horizontal and a vertical bar (a cross)."""
-    px = xx - _IC_CENTER[0]
-    py = yy - _IC_CENTER[1]
-    horizontal = _rect_sdf(px, py, _IC_ARM_HALF_L, _IC_ARM_HALF_W)
-    vertical = _rect_sdf(px, py, _IC_ARM_HALF_W, _IC_ARM_HALF_L)
-    return torch.minimum(horizontal, vertical)
-
-
-def cross_initial_condition(points: torch.Tensor, eps: float = DEFAULT_EPSILON) -> torch.Tensor:
-    """Swiss-flag cross initial condition: u = +1 on the cross, u = -1 on the
-    background, joined by the equilibrium tanh interface profile.
-
-    Args:
-        points: (N, 3) tensor of (x, y, t). Assumes the spatial domain is [0, 1]^2.
-        eps: interface half-width; must match `epsilon` in pde_residual_loss
-            (see `losses.DEFAULT_EPSILON`).
-
-    Returns:
-        (N, 1) tensor of u values.
-    """
-    xx, yy = points[:, 0:1], points[:, 1:2]
-    return -torch.tanh(_cross_sdf(xx, yy) / (np.sqrt(2.0) * eps))
-
-
 def sample_points(
     lower: tuple[float, float, float],
     upper: tuple[float, float, float],
@@ -81,6 +41,8 @@ def sample_points(
     device: torch.device | str = "cpu",
     pde_at_t0: int = 0,
     epsilon: float = DEFAULT_EPSILON,
+    ic: str = "cross",
+    ic_seed: int = 0,
 ) -> TrainingPoints:
     """Sample collocation, initial-condition, and boundary-condition points.
 
@@ -96,6 +58,9 @@ def sample_points(
         epsilon: interface half-width for the IC profile; pass the same value
             used for `epsilon` in `pde_residual_loss` to keep the IC in
             equilibrium with the PDE.
+        ic: name of the initial condition, a key of
+            `src.common.initial_conditions.INITIAL_CONDITIONS`.
+        ic_seed: random seed for the initial condition (only "noise" uses it).
 
     Returns:
         A TrainingPoints bundle.
@@ -118,7 +83,13 @@ def sample_points(
         x_pde = torch.cat([x_pde, x_ic[idx]], dim=0)
 
     x_pde = x_pde.requires_grad_(True)
-    ic_values = cross_initial_condition(x_ic, eps=epsilon)
+    # IC targets need no grad, so evaluating them in numpy is fine.
+    x_ic_np = x_ic.cpu().numpy()
+    ic_values = torch.as_tensor(
+        initial_condition(ic, x_ic_np[:, 0], x_ic_np[:, 1], epsilon=epsilon, seed=ic_seed),
+        dtype=x_ic.dtype,
+        device=device,
+    ).unsqueeze(1)
 
     x_edge = torch.linspace(lower[0], upper[0], n_bc, device=device)
     y_edge = torch.linspace(lower[1], upper[1], n_bc, device=device)

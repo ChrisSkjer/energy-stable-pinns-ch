@@ -126,13 +126,21 @@ you're in the **repo root** — either activate it
 Requires the WSL2/conda setup above (`(fenicsx-env)` in your prompt):
 
 ```bash
-python src/fem/cahn_hilliard.py --output-dir results/my_run
+python -m src.fem.cahn_hilliard --output-dir results/my_run
 ```
+
+Run it from the repo root with `-m`. The solver imports the shared initial
+conditions from `src/common/`, so `python src/fem/cahn_hilliard.py` fails on
+imports.
 
 Every field on `CahnHilliardConfig` (`src/fem/cahn_hilliard.py`) is exposed
 as a matching CLI flag automatically (`nx` → `--nx`, `epsilon` → `--epsilon`,
 `visualize` → `--visualize`/`--no-visualize`, etc.) — run `--help` to see the
-full list. Two flags control where output goes, not the physics:
+full list. `--ic {cross,two_circles,noise}` picks the initial condition
+(default `cross`; `--seed` seeds `noise`). The PINN's `--ic`/`--ic-seed`
+read from the same definitions in `src/common/initial_conditions.py`, so
+pass matching values to both when generating a ground truth. Two flags
+control where output goes, not the physics:
 
 - `--output-dir PATH` — where the run writes `cahn_hilliard_diagnostics.csv`
   (t, free_energy, total_mass), plus `frames/*.png` if `--visualize` is set
@@ -242,7 +250,9 @@ instead of the baseline (the energy-penalty loss term itself is not
 implemented yet — see Status). Run `--help` for the full flag list:
 domain bounds (`--x-max`/`--y-max`/`--t-max`), point counts
 (`--n-collocation`/`--n-ic`/`--n-bc`/`--pde-at-t0`), network size
-(`--hidden-layers`/`--hidden-width`), physics (`--epsilon`), loss weights
+(`--hidden-layers`/`--hidden-width`), physics (`--epsilon`), initial
+condition (`--ic cross|two_circles|noise`, default `cross`; `--ic-seed` for
+`noise`, which must match the FEM `--seed`), loss weights
 (`--pde-u-weight`/`--pde-mu-weight`/`--ic-weight`/`--bc-weight`), and optimizer settings
 (`--lr`, `--lbfgs-steps`, plus the early-stopping flags below).
 
