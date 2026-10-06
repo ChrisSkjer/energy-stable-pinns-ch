@@ -4,6 +4,8 @@ __pycache__/
 *.pyo
 .ipynb_checkpoints/
 tensortest.ipynb
+# Personal copy of notebooks/train_pinn.ipynb for real runs (outputs, tweaked flags)
+notebooks/*_local.ipynb
 
 # Trained model weights (regenerable; keep latest checkpoint locally only)
 *.pt

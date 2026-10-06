@@ -496,6 +496,7 @@ def solve(
             # a failed Newton solve leaves u polluted, so always (re)start the
             # attempt from the last accepted state
             u.x.array[:] = u0.x.array
+            u.x.scatter_forward()
             problem.solve()
             converged_reason = problem.solver.getConvergedReason()
 

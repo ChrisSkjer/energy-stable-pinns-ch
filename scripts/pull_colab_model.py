@@ -9,6 +9,9 @@ it back out and writes it under results/pinn_models/.
 
 Usage:
     python scripts/pull_colab_model.py [notebook_path]
+
+notebook_path defaults to notebooks/train_pinn_local.ipynb (your gitignored copy
+for real runs) if it exists, else notebooks/train_pinn.ipynb.
 """
 
 import base64
@@ -46,5 +49,7 @@ def main(notebook_path: str) -> None:
 
 
 if __name__ == "__main__":
-    default_path = REPO_ROOT / "notebooks" / "train_pinn.ipynb"
+    default_path = REPO_ROOT / "notebooks" / "train_pinn_local.ipynb"
+    if not default_path.exists():
+        default_path = REPO_ROOT / "notebooks" / "train_pinn.ipynb"
     main(sys.argv[1] if len(sys.argv) > 1 else str(default_path))

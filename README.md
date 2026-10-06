@@ -439,7 +439,10 @@ you need that test to actually execute.
 [notebooks/train_pinn.ipynb](notebooks/train_pinn.ipynb) is the training
 runner: the whole clone → install → GPU check → train → retrieve loop as six
 cells, so a GPU run is a matter of setting `run_name` once and running top to
-bottom.
+bottom. The committed version runs `--smoke-test`; for real runs, copy it to
+`notebooks/train_pinn_local.ipynb` (gitignored) and edit the flags there, so
+outputs and tweaks stay out of the repo. `scripts/pull_colab_model.py` reads
+the local copy by default.
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ChrisSkjer/energy-stable-pinns-ch/blob/main/notebooks/train_pinn.ipynb)
 
