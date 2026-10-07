@@ -137,6 +137,58 @@ def plot_comparison(
     return fig, (ax_pinn, ax_fem, ax_diff)
 
 
+def plot_line_profile(
+    x: np.ndarray,
+    y: np.ndarray,
+    c_pinn: np.ndarray,
+    c_fem: np.ndarray,
+    x_line: float = 0.25,
+    title: str | None = None,
+):
+    """PINN and FEM field along one vertical line x = x_line, at one time snapshot.
+
+    Zooms in on the diffuse interface: the 2D comparison panels show where
+    the phases are, this shows the shape of the transition between them
+    (width, steepness, over/undershoot past +-1) for both solvers on one axis.
+
+    Args:
+        x, y: (nx, ny) meshgrid coordinates (indexing="ij", as written by
+            src/pinn/evaluate.py and src/fem/cahn_hilliard.py's _FieldRecorder).
+        c_pinn, c_fem: (nx, ny) field values on that same grid.
+        x_line: x position of the line; snapped to the closest grid column.
+        title: optional figure title, e.g. "t=0.005".
+
+    Returns:
+        (fig, (ax_field, ax_profile)): the FEM field with the line marked,
+        and the PINN/FEM profiles along it.
+    """
+    i = int(np.argmin(np.abs(x[:, 0] - x_line)))
+    x_snapped = float(x[i, 0])
+    y_line = y[i, :]
+
+    fig, (ax_field, ax_profile) = plt.subplots(
+        1, 2, figsize=(11, 4), constrained_layout=True, gridspec_kw={"width_ratios": [1, 1.4]}
+    )
+
+    plot_field(x, y, c_fem, ax=ax_field, title="FEM")
+    ax_field.axvline(x_snapped, color="black", lw=1.5, ls="--")
+
+    ax_profile.plot(y_line, c_fem[i, :], lw=2, label="FEM")
+    ax_profile.plot(y_line, c_pinn[i, :], lw=2, ls="--", label="PINN")
+    ax_profile.axhline(1.0, lw=1, color="0.6", zorder=0)
+    ax_profile.axhline(-1.0, lw=1, color="0.6", zorder=0)
+    ax_profile.set_xlabel("y")
+    ax_profile.set_ylabel(f"u(x={x_snapped:.3g}, y)")
+    ax_profile.set_title(f"Profile along x = {x_snapped:.3g}")
+    ax_profile.grid(True, alpha=0.3)
+    ax_profile.legend()
+
+    if title is not None:
+        fig.suptitle(title)
+
+    return fig, (ax_field, ax_profile)
+
+
 def plot_relative_l2_error(
     t: np.ndarray,
     errors: dict[str, np.ndarray],

@@ -56,6 +56,13 @@ def parse_args() -> argparse.Namespace:
         help="Path to a FEM fem_fields.npz, for PINN-vs-FEM comparison plots of u "
         "and mu. The PINN is evaluated on that file's grid, so --nx/--ny match.",
     )
+    parser.add_argument(
+        "--profile-x",
+        type=float,
+        default=0.25,
+        help="With --fem-fields: x position of the vertical line for the "
+        "PINN-vs-FEM u profile plots.",
+    )
     return parser.parse_args()
 
 
@@ -97,7 +104,7 @@ def main() -> None:
     if args.fem_diagnostics:
         plot_args += ["--fem-diagnostics", args.fem_diagnostics]
     if args.fem_fields:
-        plot_args += ["--fem-fields", args.fem_fields]
+        plot_args += ["--fem-fields", args.fem_fields, "--profile-x", str(args.profile_x)]
     run_step("plot_results", "src.pinn.plot_results", plot_args)
 
     print(f"\nDone -- plots in {Path(checkpoint).parent / 'plots'}")

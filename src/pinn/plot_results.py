@@ -16,12 +16,16 @@ subfolder next to whichever of --evaluation/--checkpoint/--diagnostics it's
 given (see run_paths.infer_run_dir), so plots land alongside the checkpoint
 and evaluation they came from without saying so explicitly. If --diagnostics
 is omitted, a diagnostics.csv inside that same run folder is picked up
-automatically when present.
+automatically when present, and likewise the FEM run's
+cahn_hilliard_diagnostics.csv next to --fem-fields when --fem-diagnostics
+is omitted.
 
 PINN vs. FEM field comparison: pass --evaluation together with --fem-fields
 (a fem_fields.npz written by src/fem/cahn_hilliard.py, see its
 _FieldRecorder) to get plotting.plot_comparison PNGs, one per PINN
-evaluation time, plus a relative_l2_error.png of the error over time. Requires both to share the same (x, y) grid, i.e. matching
+evaluation time, a profile_*.png of u along the vertical line
+x = --profile-x (PINN and FEM on one axis, to see the shape of the
+transition), plus a relative_l2_error.png of the error over time. Requires both to share the same (x, y) grid, i.e. matching
 --nx/--ny between `python -m src.pinn.evaluate` and the FEM run.
 """
 
@@ -41,6 +45,7 @@ from src.common.plotting import (
     plot_comparison,
     plot_energy_dissipation,
     plot_field,
+    plot_line_profile,
     plot_loss_history,
     plot_mass_conservation,
     plot_relative_l2_error,
@@ -81,7 +86,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Path to a cahn_hilliard_diagnostics.csv from a FEM run "
         "(src/fem/cahn_hilliard.py), to overlay on the energy/mass plots. "
-        "Never auto-detected -- pass it explicitly.",
+        "If omitted, the cahn_hilliard_diagnostics.csv next to --fem-fields "
+        "is used when present.",
     )
     parser.add_argument(
         "--fem-fields",
@@ -91,6 +97,13 @@ def parse_args() -> argparse.Namespace:
         "_FieldRecorder). Requires --evaluation: produces one PINN-vs-FEM "
         "comparison PNG per PINN evaluation time, matched to the closest FEM "
         "snapshot time.",
+    )
+    parser.add_argument(
+        "--profile-x",
+        type=float,
+        default=0.25,
+        help="x position of the vertical line for the PINN-vs-FEM u profile "
+        "plots (profile_*.png, with --fem-fields). Snapped to the nearest grid column.",
     )
     parser.add_argument(
         "--output-dir",
@@ -130,6 +143,16 @@ def parse_args() -> argparse.Namespace:
         candidate = os.path.join(run_dir, "diagnostics.csv")
         if os.path.exists(candidate):
             args.diagnostics = candidate
+
+    # Pick up the FEM run's diagnostics alongside its fields, so a --fem-fields
+    # call doesn't redraw energy/mass plots without the FEM curve (overwriting
+    # an earlier call's two-curve versions).
+    if args.fem_diagnostics is None and args.fem_fields is not None:
+        candidate = os.path.join(
+            os.path.dirname(os.path.abspath(args.fem_fields)), "cahn_hilliard_diagnostics.csv"
+        )
+        if os.path.exists(candidate):
+            args.fem_diagnostics = candidate
 
     return args
 
@@ -177,7 +200,11 @@ def plot_evaluation(evaluation_path: str, output_dir: str, dpi: int = 150) -> li
 
 
 def plot_field_comparison(
-    evaluation_path: str, fem_fields_path: str, output_dir: str, dpi: int = 150
+    evaluation_path: str,
+    fem_fields_path: str,
+    output_dir: str,
+    dpi: int = 150,
+    profile_x: float = 0.25,
 ) -> list[str]:
     """Save one PINN-vs-FEM comparison PNG (plotting.plot_comparison) per
     PINN evaluation time, matched to the closest FEM snapshot time in
@@ -187,11 +214,13 @@ def plot_field_comparison(
     with matching --nx/--ny between `python -m src.pinn.evaluate` and the
     FEM run otherwise.
 
-    Also saves relative_l2_error.png: metrics.relative_l2_error of u and mu
+    Also saves, per matched time, a profile_*.png of u along the vertical
+    line x = profile_x (plotting.plot_line_profile), and
+    relative_l2_error.png: metrics.relative_l2_error of u and mu
     against FEM at each of those same matched times.
 
-    Returns the list of saved PNG paths: comparisons in PINN time order,
-    then the relative L2 error plot.
+    Returns the list of saved PNG paths: comparisons and profiles in PINN
+    time order, then the relative L2 error plot.
     """
     pinn = np.load(evaluation_path)
     fem = np.load(fem_fields_path)
@@ -229,6 +258,15 @@ def plot_field_comparison(
             pinn["x"], pinn["y"], pinn["mu"][idx], fem["mu"][fem_idx], **mu_kwargs
         )
         path = os.path.join(output_dir, f"comparison_mu_{idx:03d}_t{t_val:g}.png")
+        fig.savefig(path, dpi=dpi, bbox_inches="tight")
+        plt.close(fig)
+        saved.append(path)
+
+        fig, _ = plot_line_profile(
+            pinn["x"], pinn["y"], pinn["u"][idx], fem["u"][fem_idx],
+            x_line=profile_x, title=f"t={t_val:g}",
+        )
+        path = os.path.join(output_dir, f"profile_{idx:03d}_t{t_val:g}.png")
         fig.savefig(path, dpi=dpi, bbox_inches="tight")
         plt.close(fig)
         saved.append(path)
@@ -348,7 +386,11 @@ if __name__ == "__main__":
         )
     if cli_args.fem_fields is not None:
         saved_paths += plot_field_comparison(
-            cli_args.evaluation, cli_args.fem_fields, cli_args.output_dir, dpi=cli_args.dpi
+            cli_args.evaluation,
+            cli_args.fem_fields,
+            cli_args.output_dir,
+            dpi=cli_args.dpi,
+            profile_x=cli_args.profile_x,
         )
 
     for path in saved_paths:

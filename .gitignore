@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 .ipynb_checkpoints/
 tensortest.ipynb
+plot_transitions.py
 # Personal copy of notebooks/train_pinn.ipynb for real runs (outputs, tweaked flags)
 notebooks/*_local.ipynb
 
