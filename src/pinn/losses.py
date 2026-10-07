@@ -90,7 +90,7 @@ def ic_loss(
         Scalar MSE of the IC term.
     """
     u_ic = model(ic_points)[:, 0:1]
-    return torch.mean((u_ic - ic_values) ** 2)
+    return torch.mean((u_ic - ic_values) ** 2)/torch.mean(ic_values**2)
 
 
 def bc_loss(model: nn.Module, bc_points: torch.Tensor) -> torch.Tensor:
