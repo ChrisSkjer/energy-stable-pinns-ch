@@ -4,8 +4,8 @@ and/or diagnostics log.
 Thin CLI wrapper, same shape as train.py/evaluate.py: does no computation of
 its own, only orchestrates src/pinn/evaluate.py's saved .npz field arrays,
 src/pinn/train.py's checkpointed loss history, and src/pinn/diagnostics.py's
-diagnostics.csv through src/common/plotting.py, then writes PNGs (and one
-text file) to disk. Run as a module from the repo root:
+diagnostics.csv through src/common/plotting.py, then writes PNGs or PDFs
+(--format; and one text file) to disk. Run as a module from the repo root:
 
     python -m src.pinn.plot_results --evaluation evaluation.npz --checkpoint checkpoint.pt
 
@@ -113,7 +113,20 @@ def parse_args() -> argparse.Namespace:
         "the evaluation's (or else the checkpoint's, or else the diagnostics') "
         "own run folder (results/pinn_models/<run-name>/).",
     )
-    parser.add_argument("--dpi", type=int, default=150)
+    parser.add_argument(
+        "--format",
+        choices=["png", "pdf"],
+        default="png",
+        help="Output file format. pdf keeps axes/text as vector and embeds the "
+        "(rasterized) field plots as images at --dpi -- use it for the report.",
+    )
+    parser.add_argument(
+        "--dpi",
+        type=int,
+        default=None,
+        help="Resolution of PNGs, and of the rasterized fields inside PDFs. "
+        "Defaults to 150 for png and 300 for pdf.",
+    )
     args = parser.parse_args()
     if (
         args.evaluation is None
@@ -126,6 +139,8 @@ def parse_args() -> argparse.Namespace:
         )
     if args.fem_fields is not None and args.evaluation is None:
         parser.error("--fem-fields requires --evaluation")
+    if args.dpi is None:
+        args.dpi = 300 if args.format == "pdf" else 150
 
     if args.evaluation is not None:
         run_dir = os.path.dirname(os.path.abspath(args.evaluation))
@@ -157,7 +172,9 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def plot_evaluation(evaluation_path: str, output_dir: str, dpi: int = 150) -> list[str]:
+def plot_evaluation(
+    evaluation_path: str, output_dir: str, dpi: int = 150, fmt: str = "png"
+) -> list[str]:
     """Save one u and one mu field snapshot per saved time in an evaluate.py .npz.
 
     mu snapshots share one symmetric color scale across all saved times
@@ -165,7 +182,7 @@ def plot_evaluation(evaluation_path: str, output_dir: str, dpi: int = 150) -> li
     would otherwise flatten every frame's scale), since unlike u, mu is
     unbounded and has no fixed [-1, 1] range to use.
 
-    Returns the list of saved PNG paths, in time order (all u snapshots,
+    Returns the list of saved paths, in time order (all u snapshots,
     then all mu snapshots).
     """
     data = np.load(evaluation_path)
@@ -174,7 +191,7 @@ def plot_evaluation(evaluation_path: str, output_dir: str, dpi: int = 150) -> li
     saved = []
     for idx, t_val in enumerate(t):
         ax = plot_field(x, y, u[idx], title=f"PINN u, t={t_val:g}")
-        path = os.path.join(output_dir, f"field_u_{idx:03d}_t{t_val:g}.png")
+        path = os.path.join(output_dir, f"field_u_{idx:03d}_t{t_val:g}.{fmt}")
         ax.figure.savefig(path, dpi=dpi, bbox_inches="tight")
         plt.close(ax.figure)
         saved.append(path)
@@ -191,7 +208,7 @@ def plot_evaluation(evaluation_path: str, output_dir: str, dpi: int = 150) -> li
             cmap="RdBu_r",
             colorbar_label="mu",
         )
-        path = os.path.join(output_dir, f"field_mu_{idx:03d}_t{t_val:g}.png")
+        path = os.path.join(output_dir, f"field_mu_{idx:03d}_t{t_val:g}.{fmt}")
         ax.figure.savefig(path, dpi=dpi, bbox_inches="tight")
         plt.close(ax.figure)
         saved.append(path)
@@ -205,6 +222,7 @@ def plot_field_comparison(
     output_dir: str,
     dpi: int = 150,
     profile_x: float = 0.25,
+    fmt: str = "png",
 ) -> list[str]:
     """Save one PINN-vs-FEM comparison PNG (plotting.plot_comparison) per
     PINN evaluation time, matched to the closest FEM snapshot time in
@@ -219,7 +237,7 @@ def plot_field_comparison(
     relative_l2_error.png: metrics.relative_l2_error of u and mu
     against FEM at each of those same matched times.
 
-    Returns the list of saved PNG paths: comparisons and profiles in PINN
+    Returns the list of saved paths: comparisons and profiles in PINN
     time order, then the relative L2 error plot.
     """
     pinn = np.load(evaluation_path)
@@ -249,7 +267,7 @@ def plot_field_comparison(
                 f"at t={matched_t:g} instead"
             )
         fig, _ = plot_comparison(pinn["x"], pinn["y"], pinn["u"][idx], fem["u"][fem_idx])
-        path = os.path.join(output_dir, f"comparison_{idx:03d}_t{t_val:g}.png")
+        path = os.path.join(output_dir, f"comparison_{idx:03d}_t{t_val:g}.{fmt}")
         fig.savefig(path, dpi=dpi, bbox_inches="tight")
         plt.close(fig)
         saved.append(path)
@@ -257,7 +275,7 @@ def plot_field_comparison(
         fig, _ = plot_comparison(
             pinn["x"], pinn["y"], pinn["mu"][idx], fem["mu"][fem_idx], **mu_kwargs
         )
-        path = os.path.join(output_dir, f"comparison_mu_{idx:03d}_t{t_val:g}.png")
+        path = os.path.join(output_dir, f"comparison_mu_{idx:03d}_t{t_val:g}.{fmt}")
         fig.savefig(path, dpi=dpi, bbox_inches="tight")
         plt.close(fig)
         saved.append(path)
@@ -266,7 +284,7 @@ def plot_field_comparison(
             pinn["x"], pinn["y"], pinn["u"][idx], fem["u"][fem_idx],
             x_line=profile_x, title=f"t={t_val:g}",
         )
-        path = os.path.join(output_dir, f"profile_{idx:03d}_t{t_val:g}.png")
+        path = os.path.join(output_dir, f"profile_{idx:03d}_t{t_val:g}.{fmt}")
         fig.savefig(path, dpi=dpi, bbox_inches="tight")
         plt.close(fig)
         saved.append(path)
@@ -278,7 +296,7 @@ def plot_field_comparison(
                 pass  # FEM field identically zero here; leave NaN (a gap in the plot)
 
     ax = plot_relative_l2_error(pinn["t"], errors)
-    path = os.path.join(output_dir, "relative_l2_error.png")
+    path = os.path.join(output_dir, f"relative_l2_error.{fmt}")
     ax.figure.savefig(path, dpi=dpi, bbox_inches="tight")
     plt.close(ax.figure)
     saved.append(path)
@@ -286,14 +304,16 @@ def plot_field_comparison(
     return saved
 
 
-def plot_training_history(checkpoint_path: str, output_dir: str, dpi: int = 150) -> str:
+def plot_training_history(
+    checkpoint_path: str, output_dir: str, dpi: int = 150, fmt: str = "png"
+) -> str:
     """Save a loss-vs-optimizer-step plot from a train.py checkpoint's bundled history.
 
-    Returns the saved PNG path.
+    Returns the saved path.
     """
     history = torch.load(checkpoint_path, map_location="cpu")["history"]
     ax = plot_loss_history(history)
-    path = os.path.join(output_dir, "loss_history.png")
+    path = os.path.join(output_dir, f"loss_history.{fmt}")
     ax.figure.savefig(path, dpi=dpi, bbox_inches="tight")
     plt.close(ax.figure)
     return path
@@ -324,12 +344,13 @@ def plot_diagnostics(
     fem_diagnostics_path: str | None,
     output_dir: str,
     dpi: int = 150,
+    fmt: str = "png",
 ) -> list[str]:
     """Save energy-dissipation and mass-conservation PNGs from one or both
     diagnostics CSVs (src/pinn/diagnostics.py's diagnostics.csv and/or a FEM
     run's cahn_hilliard_diagnostics.csv). At least one path is required.
 
-    Returns the list of saved PNG paths.
+    Returns the list of saved paths.
     """
     t_p = e_p = m_p = None
     if diagnostics_path is not None:
@@ -354,13 +375,13 @@ def plot_diagnostics(
     saved = []
 
     ax = plot_energy_dissipation(t_p, e_p, t_f, e_f)
-    path = os.path.join(output_dir, "energy_dissipation.png")
+    path = os.path.join(output_dir, f"energy_dissipation.{fmt}")
     ax.figure.savefig(path, dpi=dpi, bbox_inches="tight")
     plt.close(ax.figure)
     saved.append(path)
 
     ax = plot_mass_conservation(t_p, m_p, t_f, m_f)
-    path = os.path.join(output_dir, "mass_conservation.png")
+    path = os.path.join(output_dir, f"mass_conservation.{fmt}")
     ax.figure.savefig(path, dpi=dpi, bbox_inches="tight")
     plt.close(ax.figure)
     saved.append(path)
@@ -374,15 +395,23 @@ if __name__ == "__main__":
 
     saved_paths = []
     if cli_args.evaluation is not None:
-        saved_paths += plot_evaluation(cli_args.evaluation, cli_args.output_dir, dpi=cli_args.dpi)
+        saved_paths += plot_evaluation(
+            cli_args.evaluation, cli_args.output_dir, dpi=cli_args.dpi, fmt=cli_args.format
+        )
     if cli_args.checkpoint is not None:
         saved_paths.append(
-            plot_training_history(cli_args.checkpoint, cli_args.output_dir, dpi=cli_args.dpi)
+            plot_training_history(
+                cli_args.checkpoint, cli_args.output_dir, dpi=cli_args.dpi, fmt=cli_args.format
+            )
         )
         saved_paths.append(write_run_summary(cli_args.checkpoint, cli_args.output_dir))
     if cli_args.diagnostics is not None or cli_args.fem_diagnostics is not None:
         saved_paths += plot_diagnostics(
-            cli_args.diagnostics, cli_args.fem_diagnostics, cli_args.output_dir, dpi=cli_args.dpi
+            cli_args.diagnostics,
+            cli_args.fem_diagnostics,
+            cli_args.output_dir,
+            dpi=cli_args.dpi,
+            fmt=cli_args.format,
         )
     if cli_args.fem_fields is not None:
         saved_paths += plot_field_comparison(
@@ -391,6 +420,7 @@ if __name__ == "__main__":
             cli_args.output_dir,
             dpi=cli_args.dpi,
             profile_x=cli_args.profile_x,
+            fmt=cli_args.format,
         )
 
     for path in saved_paths:

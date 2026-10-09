@@ -388,7 +388,9 @@ loss history, and/or a diagnostics CSV into saved PNGs (and a text summary):
 
 `--evaluation`, `--checkpoint`, `--diagnostics`, `--fem-diagnostics`, and
 `--fem-fields` are each optional, but at least one is required — pass several to get everything
-from one run into one place. If `--diagnostics` is omitted, a
+from one run into one place. `--format pdf` writes PDFs instead of PNGs
+(vector axes/text, with the field plots embedded as images), and `--dpi`
+defaults to 150 for PNG and 300 for PDF. If `--diagnostics` is omitted, a
 `diagnostics.csv` inside the inferred run folder is picked up automatically
 when present. **Output**, written under `--output-dir` (defaults to a
 `plots/` subfolder in that same run folder, e.g.

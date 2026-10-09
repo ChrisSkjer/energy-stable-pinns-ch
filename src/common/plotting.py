@@ -70,7 +70,8 @@ def plot_field(
         _, ax = plt.subplots()
 
     mesh = ax.pcolormesh(
-        x, y, c, cmap=(phase_colormap() if cmap is None else cmap), vmin=vmin, vmax=vmax, shading="auto"
+        x, y, c, cmap=(phase_colormap() if cmap is None else cmap), vmin=vmin, vmax=vmax, shading="auto",
+        rasterized=True,  # one embedded image in PDF output, not one vector quad per cell
     )
     cbar = ax.figure.colorbar(mesh, ax=ax)
     if colorbar_label is not None:
@@ -118,7 +119,8 @@ def plot_comparison(
     # 0, which would otherwise hand pcolormesh a degenerate [0, 0] color range.
     diff_bound = max(float(np.abs(diff).max()), 1e-12)
     mesh = ax_diff.pcolormesh(
-        x, y, diff, cmap="RdBu_r", vmin=-diff_bound, vmax=diff_bound, shading="auto"
+        x, y, diff, cmap="RdBu_r", vmin=-diff_bound, vmax=diff_bound, shading="auto",
+        rasterized=True,
     )
     fig.colorbar(mesh, ax=ax_diff)
     ax_diff.set_aspect("equal")

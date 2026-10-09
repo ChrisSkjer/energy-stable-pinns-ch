@@ -12,9 +12,6 @@ from torch import nn
 
 class PINN(nn.Module):
     """Configurable fully-connected network for PDE solution approximation.
-
-    TODO: decide on output dimension (c only, vs. [c, mu] for the mixed
-    formulation) and wire that into `output_dim`.
     """
 
     def __init__(
