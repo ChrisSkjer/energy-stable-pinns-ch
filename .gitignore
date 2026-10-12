@@ -48,3 +48,6 @@ Report/Research_Notes/
 *.synctex(busy)
 *.lof
 *.lot
+
+# Claude Code skills (local tooling)
+.claude/skills/
