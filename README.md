@@ -380,7 +380,7 @@ takes ~20s on CPU):
 readable by the same `src/common/plotting.py::load_diagnostics`.
 
 **3. Plot** — `src/pinn/plot_results.py` turns the `.npz`, a checkpoint's
-loss history, and/or a diagnostics CSV into saved PNGs (and a text summary):
+loss history, and/or a diagnostics CSV into saved PDFs (and a text summary):
 
 ```powershell
 .venv\Scripts\python.exe -m src.pinn.plot_results --evaluation results/pinn_models/demo_run/evaluation.npz --checkpoint results/pinn_models/demo_run/final.pt
@@ -388,30 +388,31 @@ loss history, and/or a diagnostics CSV into saved PNGs (and a text summary):
 
 `--evaluation`, `--checkpoint`, `--diagnostics`, `--fem-diagnostics`, and
 `--fem-fields` are each optional, but at least one is required — pass several to get everything
-from one run into one place. `--format pdf` writes PDFs instead of PNGs
-(vector axes/text, with the field plots embedded as images), and `--dpi`
-defaults to 150 for PNG and 300 for PDF. If `--diagnostics` is omitted, a
+from one run into one place. Plots are PDFs by default (vector axes/text,
+with the field plots embedded as images, and smaller on disk than PNG);
+`--format png` writes PNGs instead. `--dpi` defaults to 300 for PDF and 150
+for PNG. If `--diagnostics` is omitted, a
 `diagnostics.csv` inside the inferred run folder is picked up automatically
 when present. **Output**, written under `--output-dir` (defaults to a
 `plots/` subfolder in that same run folder, e.g.
 `results/pinn_models/demo_run/plots/`; each saved path is also printed to
 stdout):
 
-- `field_u_<idx>_t<value>.png` / `field_mu_<idx>_t<value>.png` — one of each
+- `field_u_<idx>_t<value>.pdf` / `field_mu_<idx>_t<value>.pdf` — one of each
   per saved time, via `src/common/plotting.py::plot_field`. The mu snapshots
   share one symmetric color scale across all times, from a robust quantile
   of `|mu|` rather than a fixed range (mu is unbounded, unlike u).
-- `loss_history.png` — loss vs. optimizer step, from the checkpoint's
+- `loss_history.pdf` — loss vs. optimizer step, from the checkpoint's
   bundled history (only if `--checkpoint` was passed).
 - `run_summary.txt` — network size, domain, sampling, optimizer, loss
   weights, trainable parameter count, and each loss term's final value (only
   if `--checkpoint` was passed) — see
   `src/pinn/run_summary.py::format_run_summary`.
-- `energy_dissipation.png` / `mass_conservation.png` — free energy and total
+- `energy_dissipation.pdf` / `mass_conservation.pdf` — free energy and total
   mass vs. time (only if `--diagnostics` and/or `--fem-diagnostics` was
   passed or auto-detected); pass both to overlay PINN against a FEM
   reference (auto-clipped to the PINN's own time window).
-- `comparison_<idx>_t<value>.png` / `comparison_mu_<idx>_t<value>.png` —
+- `comparison_<idx>_t<value>.pdf` / `comparison_mu_<idx>_t<value>.pdf` —
   PINN-vs-FEM comparison of u and of mu, one of each per evaluation time,
   matched to the closest FEM snapshot time (only if `--fem-fields` was passed, which also requires
   `--evaluation`). Needs a `fem_fields.npz` from a FEM run with `save_fields`

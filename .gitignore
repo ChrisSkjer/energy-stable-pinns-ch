@@ -31,3 +31,20 @@ results/*
 # FEniCSx / DOLFINx output formats
 *.xdmf
 *.h5
+
+# Personal research notes (public repo; kept local only)
+Report/Research_Notes/
+
+# LaTeX build files (regenerated on every build)
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.synctex(busy)
+*.lof
+*.lot

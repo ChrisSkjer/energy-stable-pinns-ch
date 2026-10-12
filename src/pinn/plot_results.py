@@ -4,8 +4,8 @@ and/or diagnostics log.
 Thin CLI wrapper, same shape as train.py/evaluate.py: does no computation of
 its own, only orchestrates src/pinn/evaluate.py's saved .npz field arrays,
 src/pinn/train.py's checkpointed loss history, and src/pinn/diagnostics.py's
-diagnostics.csv through src/common/plotting.py, then writes PNGs or PDFs
-(--format; and one text file) to disk. Run as a module from the repo root:
+diagnostics.csv through src/common/plotting.py, then writes PDFs (or PNGs
+with --format png; plus one text file) to disk. Run as a module from the repo root:
 
     python -m src.pinn.plot_results --evaluation evaluation.npz --checkpoint checkpoint.pt
 
@@ -22,10 +22,10 @@ is omitted.
 
 PINN vs. FEM field comparison: pass --evaluation together with --fem-fields
 (a fem_fields.npz written by src/fem/cahn_hilliard.py, see its
-_FieldRecorder) to get plotting.plot_comparison PNGs, one per PINN
-evaluation time, a profile_*.png of u along the vertical line
-x = --profile-x (PINN and FEM on one axis, to see the shape of the
-transition), plus a relative_l2_error.png of the error over time. Requires both to share the same (x, y) grid, i.e. matching
+_FieldRecorder) to get plotting.plot_comparison plots, one per PINN
+evaluation time, a profile_*.pdf of u along the vertical line
+x = --profile-x, or the horizontal line y = --profile-y if given (PINN
+and FEM on one axis, to see the shape of the transition), plus a relative_l2_error.pdf of the error over time. Requires both to share the same (x, y) grid, i.e. matching
 --nx/--ny between `python -m src.pinn.evaluate` and the FEM run.
 """
 
@@ -95,7 +95,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Path to a fem_fields.npz from a FEM run (src/fem/cahn_hilliard.py's "
         "_FieldRecorder). Requires --evaluation: produces one PINN-vs-FEM "
-        "comparison PNG per PINN evaluation time, matched to the closest FEM "
+        "comparison plot per PINN evaluation time, matched to the closest FEM "
         "snapshot time.",
     )
     parser.add_argument(
@@ -103,22 +103,31 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.25,
         help="x position of the vertical line for the PINN-vs-FEM u profile "
-        "plots (profile_*.png, with --fem-fields). Snapped to the nearest grid column.",
+        "plots (profile_*.pdf, with --fem-fields). Snapped to the nearest grid column.",
+    )
+    parser.add_argument(
+        "--profile-y",
+        type=float,
+        default=None,
+        help="y position of a horizontal line for the profile plots instead of "
+        "the vertical --profile-x one, e.g. 0.5 to cut through both circles of "
+        "the two_circles initial condition. Snapped to the nearest grid row.",
     )
     parser.add_argument(
         "--output-dir",
         type=str,
         default=None,
-        help="Directory to save PNGs into. Defaults to a plots/ subfolder inside "
+        help="Directory to save plots into. Defaults to a plots/ subfolder inside "
         "the evaluation's (or else the checkpoint's, or else the diagnostics') "
         "own run folder (results/pinn_models/<run-name>/).",
     )
     parser.add_argument(
         "--format",
         choices=["png", "pdf"],
-        default="png",
-        help="Output file format. pdf keeps axes/text as vector and embeds the "
-        "(rasterized) field plots as images at --dpi -- use it for the report.",
+        default="pdf",
+        help="Output file format. pdf (default) keeps axes/text as vector and "
+        "embeds the (rasterized) field plots as images at --dpi, and is smaller "
+        "than png on disk.",
     )
     parser.add_argument(
         "--dpi",
@@ -173,7 +182,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def plot_evaluation(
-    evaluation_path: str, output_dir: str, dpi: int = 150, fmt: str = "png"
+    evaluation_path: str, output_dir: str, dpi: int = 150, fmt: str = "pdf"
 ) -> list[str]:
     """Save one u and one mu field snapshot per saved time in an evaluate.py .npz.
 
@@ -222,9 +231,10 @@ def plot_field_comparison(
     output_dir: str,
     dpi: int = 150,
     profile_x: float = 0.25,
-    fmt: str = "png",
+    fmt: str = "pdf",
+    profile_y: float | None = None,
 ) -> list[str]:
-    """Save one PINN-vs-FEM comparison PNG (plotting.plot_comparison) per
+    """Save one PINN-vs-FEM comparison plot (plotting.plot_comparison) per
     PINN evaluation time, matched to the closest FEM snapshot time in
     fem_fields.npz.
 
@@ -232,9 +242,10 @@ def plot_field_comparison(
     with matching --nx/--ny between `python -m src.pinn.evaluate` and the
     FEM run otherwise.
 
-    Also saves, per matched time, a profile_*.png of u along the vertical
-    line x = profile_x (plotting.plot_line_profile), and
-    relative_l2_error.png: metrics.relative_l2_error of u and mu
+    Also saves, per matched time, a profile_*.pdf of u along the vertical
+    line x = profile_x, or the horizontal line y = profile_y if given
+    (plotting.plot_line_profile), and
+    relative_l2_error.pdf: metrics.relative_l2_error of u and mu
     against FEM at each of those same matched times.
 
     Returns the list of saved paths: comparisons and profiles in PINN
@@ -282,7 +293,7 @@ def plot_field_comparison(
 
         fig, _ = plot_line_profile(
             pinn["x"], pinn["y"], pinn["u"][idx], fem["u"][fem_idx],
-            x_line=profile_x, title=f"t={t_val:g}",
+            x_line=profile_x, y_line=profile_y, title=f"t={t_val:g}",
         )
         path = os.path.join(output_dir, f"profile_{idx:03d}_t{t_val:g}.{fmt}")
         fig.savefig(path, dpi=dpi, bbox_inches="tight")
@@ -305,7 +316,7 @@ def plot_field_comparison(
 
 
 def plot_training_history(
-    checkpoint_path: str, output_dir: str, dpi: int = 150, fmt: str = "png"
+    checkpoint_path: str, output_dir: str, dpi: int = 150, fmt: str = "pdf"
 ) -> str:
     """Save a loss-vs-optimizer-step plot from a train.py checkpoint's bundled history.
 
@@ -344,9 +355,9 @@ def plot_diagnostics(
     fem_diagnostics_path: str | None,
     output_dir: str,
     dpi: int = 150,
-    fmt: str = "png",
+    fmt: str = "pdf",
 ) -> list[str]:
-    """Save energy-dissipation and mass-conservation PNGs from one or both
+    """Save energy-dissipation and mass-conservation plots from one or both
     diagnostics CSVs (src/pinn/diagnostics.py's diagnostics.csv and/or a FEM
     run's cahn_hilliard_diagnostics.csv). At least one path is required.
 
@@ -421,6 +432,7 @@ if __name__ == "__main__":
             dpi=cli_args.dpi,
             profile_x=cli_args.profile_x,
             fmt=cli_args.format,
+            profile_y=cli_args.profile_y,
         )
 
     for path in saved_paths:

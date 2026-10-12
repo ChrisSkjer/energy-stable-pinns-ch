@@ -14,6 +14,8 @@ Usage:
     python scripts/analyze_run.py eps0.01_h64x4 --device cuda --t 0.0 0.01 0.05
     python scripts/analyze_run.py demo_run --fem-diagnostics results/eps0.05_nx96_dt2e-4/cahn_hilliard_diagnostics.csv
     python scripts/analyze_run.py demo_run --fem-fields results/eps0.05_nx96_dt2e-4/fem_fields.npz
+    python scripts/analyze_run.py demo_run --format png
+    python scripts/analyze_run.py demo_run --fem-fields results/eps0.05_nx100_dte-4_two_cricles/fem_fields.npz --profile-y 0.5
 """
 
 import argparse
@@ -63,6 +65,19 @@ def parse_args() -> argparse.Namespace:
         help="With --fem-fields: x position of the vertical line for the "
         "PINN-vs-FEM u profile plots.",
     )
+    parser.add_argument(
+        "--profile-y",
+        type=float,
+        default=None,
+        help="With --fem-fields: y position of a horizontal line to use instead "
+        "of the vertical --profile-x one (e.g. 0.5 for two_circles).",
+    )
+    parser.add_argument(
+        "--format",
+        choices=["png", "pdf"],
+        default="pdf",
+        help="Plot file format, passed on to plot_results.",
+    )
     return parser.parse_args()
 
 
@@ -100,11 +115,15 @@ def main() -> None:
         str(Path(checkpoint).with_name("evaluation.npz")),
         "--checkpoint",
         checkpoint,
+        "--format",
+        args.format,
     ]
     if args.fem_diagnostics:
         plot_args += ["--fem-diagnostics", args.fem_diagnostics]
     if args.fem_fields:
         plot_args += ["--fem-fields", args.fem_fields, "--profile-x", str(args.profile_x)]
+        if args.profile_y is not None:
+            plot_args += ["--profile-y", str(args.profile_y)]
     run_step("plot_results", "src.pinn.plot_results", plot_args)
 
     print(f"\nDone -- plots in {Path(checkpoint).parent / 'plots'}")
