@@ -398,7 +398,8 @@ when present. **Output**, written under `--output-dir` (defaults to a
 `results/pinn_models/demo_run/plots/`; each saved path is also printed to
 stdout):
 
-- `field_u_<idx>_t<value>.pdf` / `field_mu_<idx>_t<value>.pdf` — one of each
+- `field_u_<idx>_t<value>.pdf` / `field_mu_<idx>_t<value>.pdf` — only with
+  `--field-plots` (opt-in, also on `scripts/analyze_run.py`); one of each
   per saved time, via `src/common/plotting.py::plot_field`. The mu snapshots
   share one symmetric color scale across all times, from a robust quantile
   of `|mu|` rather than a fixed range (mu is unbounded, unlike u).

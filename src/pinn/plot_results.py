@@ -20,6 +20,9 @@ automatically when present, and likewise the FEM run's
 cahn_hilliard_diagnostics.csv next to --fem-fields when --fem-diagnostics
 is omitted.
 
+PINN u/mu field snapshots (field_u_*, field_mu_*) are opt-in: pass
+--field-plots together with --evaluation.
+
 PINN vs. FEM field comparison: pass --evaluation together with --fem-fields
 (a fem_fields.npz written by src/fem/cahn_hilliard.py, see its
 _FieldRecorder) to get plotting.plot_comparison plots, one per PINN
@@ -63,7 +66,13 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Path to a .npz written by src/pinn/evaluate.py (x, y, t, u, mu). "
-        "Produces one u field snapshot per saved time.",
+        "Used by --fem-fields comparisons, and by --field-plots.",
+    )
+    parser.add_argument(
+        "--field-plots",
+        action="store_true",
+        help="With --evaluation: also save one PINN u and one mu field snapshot "
+        "per saved time (field_u_*, field_mu_*). Off by default to keep output small.",
     )
     parser.add_argument(
         "--checkpoint",
@@ -148,6 +157,8 @@ def parse_args() -> argparse.Namespace:
         )
     if args.fem_fields is not None and args.evaluation is None:
         parser.error("--fem-fields requires --evaluation")
+    if args.field_plots and args.evaluation is None:
+        parser.error("--field-plots requires --evaluation")
     if args.dpi is None:
         args.dpi = 300 if args.format == "pdf" else 150
 
@@ -405,7 +416,7 @@ if __name__ == "__main__":
     os.makedirs(cli_args.output_dir, exist_ok=True)
 
     saved_paths = []
-    if cli_args.evaluation is not None:
+    if cli_args.field_plots:
         saved_paths += plot_evaluation(
             cli_args.evaluation, cli_args.output_dir, dpi=cli_args.dpi, fmt=cli_args.format
         )

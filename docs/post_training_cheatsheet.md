@@ -114,7 +114,8 @@ to get everything in one folder.
 
 | Flag | Produces |
 | --- | --- |
-| `--evaluation <npz>` | `field_u_<idx>_t<val>.png`, `field_mu_<idx>_t<val>.png` (one each per saved time) |
+| `--evaluation <npz>` | nothing on its own; input for `--fem-fields` and `--field-plots` |
+| `--field-plots` | `field_u_<idx>_t<val>.png`, `field_mu_<idx>_t<val>.png` (one each per saved time) — requires `--evaluation` |
 | `--checkpoint <pt>` | `loss_history.png` + `run_summary.txt` |
 | `--diagnostics <csv>` | `energy_dissipation.png`, `mass_conservation.png` |
 | `--fem-diagnostics <csv>` | FEM reference overlaid on those same two plots |

@@ -15,6 +15,7 @@ Usage:
     python scripts/analyze_run.py demo_run --fem-diagnostics results/eps0.05_nx96_dt2e-4/cahn_hilliard_diagnostics.csv
     python scripts/analyze_run.py demo_run --fem-fields results/eps0.05_nx96_dt2e-4/fem_fields.npz
     python scripts/analyze_run.py demo_run --format png
+    python scripts/analyze_run.py demo_run --field-plots
     python scripts/analyze_run.py demo_run --fem-fields results/eps0.05_nx100_dte-4_two_cricles/fem_fields.npz --profile-y 0.5
 """
 
@@ -73,6 +74,11 @@ def parse_args() -> argparse.Namespace:
         "of the vertical --profile-x one (e.g. 0.5 for two_circles).",
     )
     parser.add_argument(
+        "--field-plots",
+        action="store_true",
+        help="Also save the PINN u and mu field snapshots (off by default).",
+    )
+    parser.add_argument(
         "--format",
         choices=["png", "pdf"],
         default="pdf",
@@ -118,6 +124,8 @@ def main() -> None:
         "--format",
         args.format,
     ]
+    if args.field_plots:
+        plot_args.append("--field-plots")
     if args.fem_diagnostics:
         plot_args += ["--fem-diagnostics", args.fem_diagnostics]
     if args.fem_fields:
