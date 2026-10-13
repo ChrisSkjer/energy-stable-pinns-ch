@@ -80,7 +80,7 @@ domain bounds come out of the checkpoint, so they're never passed here.
 | --- | --- | --- |
 | `--checkpoint-path` | *(required)* | |
 | `--t T [T ...]` | *(required)* | Must lie in `[0, t_max]` — the net was never trained past it |
-| `--nx` / `--ny` | `100` / `100` | Must match the FEM run's `nx`/`ny` for `--fem-fields` comparisons |
+| `--nx` / `--ny` | `100` / `100` | Must equal the FEM file's grid (`fem_fields.npz` `x.shape`) for `--fem-fields` comparisons — `analyze_run.py` sets it for you |
 | `--device` | `cpu` | |
 | `--output` | `<run>/evaluation.npz` | |
 
@@ -123,7 +123,7 @@ to get everything in one folder.
 | `--checkpoint <pt>` | `loss_history.pdf` + `run_summary.txt`, and `heldout_residual.pdf` if trained with `--heldout-every` |
 | `--diagnostics <csv>` | `energy_dissipation.pdf`, `mass_conservation.pdf` |
 | `--fem-diagnostics <csv>` | FEM reference overlaid on those same two plots |
-| `--fem-fields <npz>` | `comparison_<idx>_t<val>.pdf` + `comparison_mu_<idx>_t<val>.pdf` (relative L2 error in the diff panel's title), and `relative_l2_error.pdf` — requires `--evaluation` |
+| `--fem-fields <npz>` | `comparison_<idx>_t<val>.pdf` + `comparison_mu_<idx>_t<val>.pdf` (relative L2 error in the diff panel's title), and `relative_l2_error.pdf` — requires `--evaluation`. With `--checkpoint` too, warns if the FEM run didn't start from this run's IC/epsilon/seed |
 | `--profile-x X` | with `--fem-fields`: `profile_<idx>_t<val>.pdf`, u along the vertical line `x = X` (default `0.25`), PINN and FEM on one axis |
 | `--profile-y Y` | same, along the horizontal line `y = Y` instead; overrides `--profile-x` |
 | `--output-dir` | defaults to `plots/` inside the inferred run folder |
@@ -173,8 +173,15 @@ Requirements, all of which will bite otherwise:
 
 - `--evaluation` must also be passed (the CLI errors out without it).
 - The two `(x, y)` grids must be identical, or it raises — so
-  `src.pinn.evaluate --nx/--ny` must equal the FEM run's `--nx/--ny` (both
-  default to 100, so the defaults already line up).
+  `src.pinn.evaluate --nx/--ny` must equal `fem_fields.npz`'s `x.shape`.
+  That is the FEM run's `--nx/--ny` **+ 1** (the mesh vertices) for FEM runs
+  made after the grid was moved onto the vertices, and `--nx/--ny` itself
+  for older files. `scripts/analyze_run.py --fem-fields` reads it from the file.
+- `fem_fields.npz` doesn't record the IC, epsilon or seed. Pass `--checkpoint`
+  as well and the FEM `u(t=0)` is checked against this run's IC; a mismatch
+  (wrong IC, epsilon or noise seed) prints a warning.
+- The FEM solver only sets u at t=0, so FEM `mu(t=0)` is all zeros; the mu
+  comparison and mu error at that time are skipped, with a warning.
 - The FEM domain is the unit square, so the PINN must have been trained with
   `--x-max 1.0 --y-max 1.0` (the defaults).
 - The FEM run needs `save_fields` on (default true) to have written

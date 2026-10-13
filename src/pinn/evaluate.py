@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import warnings
 
 import numpy as np
 import torch
@@ -115,8 +116,14 @@ def evaluate_on_grid(
     grid points should NOT have requires_grad_(True) -- no gradients needed,
     and torch.no_grad() should wrap the forward pass.
     """
-    x_lo, y_lo, _ = model.lower_bound.tolist()
-    x_hi, y_hi, _ = model.upper_bound.tolist()
+    x_lo, y_lo, t_lo = model.lower_bound.tolist()
+    x_hi, y_hi, t_hi = model.upper_bound.tolist()
+    # Relative slack: the bounds are float32, so t_max=0.01 is stored as 0.009999999776.
+    if not t_lo - 1e-6 * abs(t_hi) <= t <= t_hi * (1 + 1e-6):
+        warnings.warn(
+            f"t={t:g} is outside the window the network was trained on, "
+            f"[{t_lo:g}, {t_hi:g}]: these values are extrapolation"
+        )
     x = np.linspace(x_lo, x_hi, nx)
     y = np.linspace(y_lo, y_hi, ny)
     X, Y = np.meshgrid(x, y, indexing="ij")

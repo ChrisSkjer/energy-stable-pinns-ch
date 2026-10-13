@@ -71,6 +71,16 @@ class CahnHilliardConfig:
 
     When `adaptive_dt` is set the solver retries a failed step with a halved
     dt rather than aborting, so a slightly-too-large dt self-corrects.
+
+    The first `startup_steps` steps are backward Euler (theta=1), the rest use
+    `theta` (a Rannacher start). The IC only sets c, so mu starts at 0, and a
+    Crank-Nicolson first step from there applies half the flux: u then lags
+    the true solution by ~dt/2 and mu stays off for many steps (cross IC,
+    dt=1e-4, t <= 0.01: 0.08-0.4% relative L2 error in u, 0.7-6% in mu).
+    Starting Crank-Nicolson from a consistent mu instead rings on the IC's
+    kinks (the cross's corners). Two implicit steps avoid both, cutting those
+    errors to 0.001-0.08% in u and 0.006-1% in mu; startup_steps=0 is the
+    old scheme.
     """
 
     nx: int = 100
@@ -80,6 +90,7 @@ class CahnHilliardConfig:
     dt: float = 1.0e-4  # ~tau/50; initial/maximum step, reduced if adaptive_dt
     t_final: float = 0.1  # ~50*tau, enough for full separation at epsilon=0.05
     theta: float = 0.5  # Crank-Nicolson parameter
+    startup_steps: int = 2  # backward-Euler steps before switching to theta, see above
     log_every: int = 5  # write diagnostics every N time steps
     ic: str = "cross"  # initial condition, see src/common/initial_conditions.py
     seed: int = 42  # random seed for the initial condition (used by ic="noise")
@@ -187,6 +198,9 @@ class _FrameWriter:
             cmap=self.cmap,
             clim=[-1, 1],
             scalar_bar_args=self.scalar_bar_args,
+            # Lighting shades a flat 2D mesh ~25% darker than the colour bar,
+            # so c could no longer be read off the bar.
+            lighting=False,
         )
         if self.show_gridpoints:
             plotter.add_points(
@@ -195,7 +209,9 @@ class _FrameWriter:
                 point_size=3,
                 render_points_as_spheres=True,
             )
-        plotter.view_xy(negative=True)
+        # Camera on +z: x to the right, y up. view_xy(negative=True) looks from
+        # -z and mirrors x, which put the large two_circles disk on the right.
+        plotter.view_xy()
         plotter.add_text(
             f"time: {t:.2e}", font_size=12, color="black", name="timelabel"
         )
@@ -204,7 +220,8 @@ class _FrameWriter:
 
 
 def _interpolate_to_grid(coords: np.ndarray, values: np.ndarray, X: np.ndarray, Y: np.ndarray) -> np.ndarray:
-    """Scatter DOF values onto a regular (nx, ny) grid via linear interpolation.
+    """Scatter DOF values onto a regular grid via linear interpolation (exact
+    at grid points that coincide with a DOF, as _FieldRecorder's all do).
 
     Falls back to nearest-neighbor for any grid point griddata leaves as NaN
     -- happens occasionally right at the domain boundary, where a target
@@ -225,12 +242,16 @@ class _FieldRecorder:
 
     Uses the same (x, y, t, u, mu) layout as src/pinn/evaluate.py's
     save_evaluation, so src/common/plotting.py::plot_comparison can consume
-    either one -- x, y are (nx, ny) meshgrids (np.meshgrid(..., indexing="ij"))
-    and u, mu are (len(t), nx, ny).
+    either one -- x, y are (nx+1, ny+1) meshgrids (np.meshgrid(...,
+    indexing="ij")) and u, mu are (len(t), nx+1, ny+1).
 
-    DOLFINx's P1 dofs for create_unit_square(nx, ny) sit exactly on this grid
-    but not in raster order, so each snapshot is scattered onto (nx, ny) with
-    scipy.interpolate.griddata rather than reshaped directly.
+    nx+1 points per side, because create_unit_square(nx, ny) has nx cells and
+    so nx+1 vertices per side: the grid then sits exactly on the P1 dofs and
+    the values saved are the nodal values themselves. (An nx-point grid falls
+    between the vertices and adds an interpolation error -- 0.37% relative L2
+    for the cross IC at eps=0.05 -- to every PINN-vs-FEM comparison.) The
+    dofs are not in raster order, so each snapshot is still scattered onto
+    the grid with scipy.interpolate.griddata rather than reshaped directly.
     """
 
     def __init__(self, every: int, V0, dofs0, V1, dofs1, nx: int, ny: int) -> None:
@@ -241,8 +262,8 @@ class _FieldRecorder:
         self.dofs1 = dofs1[0] if isinstance(dofs1, list) else dofs1
         self.coords0 = V0.tabulate_dof_coordinates()[:, :2]
         self.coords1 = V1.tabulate_dof_coordinates()[:, :2]
-        x = np.linspace(0.0, 1.0, nx)
-        y = np.linspace(0.0, 1.0, ny)
+        x = np.linspace(0.0, 1.0, nx + 1)
+        y = np.linspace(0.0, 1.0, ny + 1)
         self.X, self.Y = np.meshgrid(x, y, indexing="ij")
         self.times: list[float] = []
         self.u_frames: list[np.ndarray] = []
@@ -314,9 +335,10 @@ def solve(
     `config.viz_every` cadence:
       - `frames/frame_*.png`, if `config.visualize` (rendered snapshots).
       - `fem_fields.npz` (x, y, t, u, mu), if `config.save_fields` -- raw
-        field data on the same (nx, ny) grid layout as a PINN evaluation.npz
-        (see src/pinn/evaluate.py::save_evaluation), for direct comparison
-        via src/common/plotting.py::plot_comparison.
+        nodal values on the (nx+1, ny+1) grid of mesh vertices, in the same
+        layout as a PINN evaluation.npz (see
+        src/pinn/evaluate.py::save_evaluation), for direct comparison via
+        src/common/plotting.py::plot_comparison.
 
     Args:
         config: solver configuration (mesh resolution, epsilon, mobility, dt, t_final).
@@ -406,11 +428,13 @@ def solve(
     dfdc = ufl.diff(f, c)
 
     lam = config.epsilon**2  # interfacial-energy coefficient
-    mu_mid = (1.0 - config.theta) * mu0 + config.theta * mu
 
-    # dt lives in the form as a Constant so adaptive stepping can change it
-    # without rebuilding (and recompiling) the variational form each time
+    # dt and theta live in the form as Constants so adaptive stepping and the
+    # backward-Euler start can change them without rebuilding (and
+    # recompiling) the variational form each time
     dt_const = Constant(mesh, default_real_type(config.dt))
+    theta_const = Constant(mesh, default_real_type(config.theta))
+    mu_mid = (1.0 - theta_const) * mu0 + theta_const * mu
 
     F0 = (
         ufl.inner(c, q) * ufl.dx
@@ -492,6 +516,7 @@ def solve(
             # never step past t_final
             dt_current = min(dt_current, config.t_final - t)
             dt_const.value = dt_current
+            theta_const.value = 1.0 if step < config.startup_steps else config.theta
 
             # a failed Newton solve leaves u polluted, so always (re)start the
             # attempt from the last accepted state

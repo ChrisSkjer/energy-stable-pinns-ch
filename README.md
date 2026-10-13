@@ -145,8 +145,9 @@ control where output goes, not the physics:
 
 - `--output-dir PATH` — where the run writes `cahn_hilliard_diagnostics.csv`
   (t, free_energy, total_mass), plus `frames/*.png` if `--visualize` is set
-  and `fem_fields.npz` (raw `u`, `mu` on an `nx` x `ny` grid, for PINN-vs-FEM
-  comparison plots) if `--save-fields` is set. Both are on by default.
+  and `fem_fields.npz` (raw `u`, `mu` at the `(nx+1)` x `(ny+1)` mesh
+  vertices, for PINN-vs-FEM comparison plots) if `--save-fields` is set. Both
+  are on by default.
   **Defaults to `data/` if you don't pass it.**
 - `--overwrite` — required if `--output-dir` already contains a previous
   run's results. **Without a flag at all, the solver refuses to run and
@@ -443,8 +444,10 @@ stdout):
   per saved time, via `src/common/plotting.py::plot_field`. The mu snapshots
   share one symmetric color scale across all times, from a robust quantile
   of `|mu|` rather than a fixed range (mu is unbounded, unlike u).
-- `loss_history.pdf` — loss vs. optimizer step, from the checkpoint's
-  bundled history (only if `--checkpoint` was passed).
+- `loss_history.pdf` — loss vs. step, from the checkpoint's bundled history
+  (only if `--checkpoint` was passed): one point per Adam epoch, then one per
+  L-BFGS loss evaluation (line-search trials included, hence the spikes),
+  with a dotted line where L-BFGS takes over.
 - `run_summary.txt` — network size, domain, sampling, optimizer, loss
   weights, trainable parameter count, and each loss term's final value (only
   if `--checkpoint` was passed) — see
@@ -457,7 +460,9 @@ stdout):
   PINN-vs-FEM comparison of u and of mu, one of each per evaluation time,
   matched to the closest FEM snapshot time (only if `--fem-fields` was passed, which also requires
   `--evaluation`). Needs a `fem_fields.npz` from a FEM run with `save_fields`
-  on, evaluated on the same `(x, y)` grid — i.e. matching `--nx`/`--ny`.
+  on, evaluated on the same `(x, y)` grid — i.e. `evaluate --nx`/`--ny` equal
+  to the file's `x.shape` (`analyze_run.py` reads it). With `--checkpoint`
+  as well, warns if the FEM run started from a different IC/epsilon/seed.
 - `profile_<idx>_t<value>.pdf` — line slice of u, one per evaluation time
   (only with `--fem-fields`), via `src/common/plotting.py::plot_line_profile`:
   left the FEM field with the line dashed in, right PINN and FEM u along that

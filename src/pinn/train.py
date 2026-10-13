@@ -354,7 +354,7 @@ def train(args: argparse.Namespace) -> None:
             record_heldout()
         if epoch % args.checkpoint_every == 0:
             checkpoint_path = os.path.join(checkpoints_dir, f"checkpoint_step{len(history['total']):06d}.pt")
-            save_checkpoint(model, checkpoint_path, args, history, heldout)
+            save_checkpoint(model, checkpoint_path, args, history, heldout, adam_steps=len(history["total"]))
 
         new_collocation = sampler.update(model, epoch + 1)
         if new_collocation is not None:
@@ -383,6 +383,9 @@ def train(args: argparse.Namespace) -> None:
     if best_adam_state is not None:
         model.load_state_dict(best_adam_state)
         print(f"[adam] restored best weights (total {best_adam_total:.4e})")
+    # --adam-patience can end Adam before --epochs, so history alone can't
+    # tell where L-BFGS took over; checkpoints carry it from here on.
+    adam_steps = len(history.get("total", []))
 
     lbfgs_steps = 2 if args.smoke_test else args.lbfgs_steps
     lbfgs = torch.optim.LBFGS(model.parameters(), lr=1.0, max_iter=20, line_search_fn="strong_wolfe")
@@ -406,7 +409,7 @@ def train(args: argparse.Namespace) -> None:
             record_heldout()
         if lbfgs_step % args.checkpoint_every == 0:
             checkpoint_path = os.path.join(checkpoints_dir, f"checkpoint_step{len(history['total']):06d}.pt")
-            save_checkpoint(model, checkpoint_path, args, history, heldout)
+            save_checkpoint(model, checkpoint_path, args, history, heldout, adam_steps=adam_steps)
 
         total = last_losses["total"].item()
         if is_improvement(total, best_total, args.lbfgs_tol):
@@ -424,7 +427,7 @@ def train(args: argparse.Namespace) -> None:
 
     if heldout is not None and (not heldout["step"] or heldout["step"][-1] != len(history["total"])):
         record_heldout()
-    save_checkpoint(model, final_path, args, history, heldout)
+    save_checkpoint(model, final_path, args, history, heldout, adam_steps=adam_steps)
     print(f"final model: {final_path}")
 
 
@@ -434,6 +437,7 @@ def save_checkpoint(
     args: argparse.Namespace,
     history: dict[str, list[float]],
     heldout: dict[str, list[float]] | None = None,
+    adam_steps: int | None = None,
 ) -> None:
     """Save model weights plus the metadata needed to reload them.
 
@@ -449,10 +453,16 @@ def save_checkpoint(
     in `history`: it is logged every K steps, not every step, so it can't
     share history's one-value-per-step lists. Keys are "step" (index into
     history), "pde_u" and "pde_mu" (unweighted).
+
+    `adam_steps` is saved as "adam_steps": how many leading history entries
+    are Adam epochs, the rest being L-BFGS closure evaluations (see
+    src/pinn/run_summary.py::adam_step_count).
     """
     checkpoint = {"model_state": model.state_dict(), "args": vars(args), "history": history}
     if heldout is not None:
         checkpoint["heldout"] = heldout
+    if adam_steps is not None:
+        checkpoint["adam_steps"] = adam_steps
     torch.save(checkpoint, path)
 
 

@@ -88,3 +88,30 @@ def test_format_run_summary_with_model_and_history():
     assert "final total: 7.100000e-01" in text
     assert "final pde_mu: 1.000000e-02" in text
     assert "pde_mu_weight: 1.0" in text
+
+
+def test_adam_step_count():
+    from src.pinn.run_summary import adam_step_count
+
+    history = {"total": [1.0] * 12}
+    # Recorded by train.py: exact, even when --adam-patience cut Adam short.
+    assert adam_step_count(dict(_ARGS, adam_patience=3), history, adam_steps=7) == 7
+    # Older checkpoints: Adam ran all --epochs (clamped for a mid-Adam checkpoint).
+    assert adam_step_count(dict(_ARGS, epochs=10), history) == 10
+    assert adam_step_count(dict(_ARGS, epochs=100), history) == 12
+    assert adam_step_count(dict(_ARGS, smoke_test=True), history) == 5
+    # Older checkpoints with --adam-patience: Adam may have stopped early.
+    assert adam_step_count(dict(_ARGS, adam_patience=3), history) is None
+
+
+def test_format_run_summary_splits_adam_and_lbfgs():
+    from src.pinn.run_summary import format_run_summary
+
+    history = {"total": [1.0] * 12}
+    text = format_run_summary(dict(_ARGS, epochs=20, adam_patience=3), history=history, adam_steps=7)
+    assert "adam steps: 7" in text
+    assert "lbfgs closure evals: 5" in text
+
+    text = format_run_summary(dict(_ARGS, epochs=20, adam_patience=3), history=history)
+    assert "adam steps: unknown" in text
+    assert "lbfgs closure evals: unknown" in text

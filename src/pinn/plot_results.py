@@ -28,8 +28,10 @@ PINN vs. FEM field comparison: pass --evaluation together with --fem-fields
 _FieldRecorder) to get plotting.plot_comparison plots, one per PINN
 evaluation time, a profile_*.pdf of u along the vertical line
 x = --profile-x, or the horizontal line y = --profile-y if given (PINN
-and FEM on one axis, to see the shape of the transition), plus a relative_l2_error.pdf of the error over time. Requires both to share the same (x, y) grid, i.e. matching
---nx/--ny between `python -m src.pinn.evaluate` and the FEM run.
+and FEM on one axis, to see the shape of the transition), plus a relative_l2_error.pdf of the error over time. Requires both to share the same (x, y) grid:
+evaluate with --nx/--ny equal to fem_fields.npz's x.shape, which is the FEM
+run's --nx/--ny + 1 for files saved since the grid sits on the mesh vertices
+(scripts/analyze_run.py reads it from the file).
 """
 
 from __future__ import annotations
@@ -42,6 +44,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+from src.common.initial_conditions import initial_condition
 from src.common.metrics import relative_l2_error
 from src.common.plotting import (
     load_diagnostics,
@@ -55,7 +58,13 @@ from src.common.plotting import (
     plot_relative_l2_error,
 )
 from src.pinn.run_paths import infer_run_dir
-from src.pinn.run_summary import format_run_summary
+from src.pinn.run_summary import adam_step_count, format_run_summary
+
+# Relative L2 distance between a FEM run's u(t=0) and a PINN run's analytic
+# IC above which the two can't be the same setup. The same IC lands at 0.1-0.4%
+# (0 on the nodal grid of a current fem_fields.npz); epsilon off by 0.01 already
+# gives ~5%, another IC or noise seed far more.
+FEM_IC_MISMATCH = 0.02
 
 
 def parse_args() -> argparse.Namespace:
@@ -207,8 +216,8 @@ def plot_evaluation(
     Returns the list of saved paths, in time order (all u snapshots,
     then all mu snapshots).
     """
-    data = np.load(evaluation_path)
-    x, y, t, u, mu = data["x"], data["y"], data["t"], data["u"], data["mu"]
+    with np.load(evaluation_path) as data:
+        x, y, t, u, mu = data["x"], data["y"], data["t"], data["u"], data["mu"]
 
     saved = []
     for idx, t_val in enumerate(t):
@@ -246,14 +255,26 @@ def plot_field_comparison(
     profile_x: float = 0.25,
     fmt: str = "pdf",
     profile_y: float | None = None,
+    train_args: dict | None = None,
 ) -> list[str]:
     """Save one PINN-vs-FEM comparison plot (plotting.plot_comparison) per
     PINN evaluation time, matched to the closest FEM snapshot time in
     fem_fields.npz.
 
     Raises if the two .npz files aren't on the same (x, y) grid -- re-run
-    with matching --nx/--ny between `python -m src.pinn.evaluate` and the
-    FEM run otherwise.
+    `python -m src.pinn.evaluate` with --nx/--ny equal to fem_fields.npz's
+    x.shape otherwise (scripts/analyze_run.py does this for you).
+
+    train_args (the PINN checkpoint's "args"), when given, are used to check
+    that the FEM run started from this run's initial condition: fem_fields.npz
+    records no ic/epsilon/seed, so a reference picked by folder name could be
+    the wrong one. A mismatch warns rather than raises.
+
+    The mu comparison is skipped (with a warning) at FEM snapshots where mu is
+    identically zero: the FEM solver only sets u at t = 0, so its mu(0) = 0
+    is not a state to compare a PINN against. (The IC's actual mu(0) is
+    singular at the IC's kinks -- the cross's corners, the circle centres --
+    so no smooth network could match it anyway.)
 
     Also saves, per matched time, a profile_*.pdf of u along the vertical
     line x = profile_x, or the horizontal line y = profile_y if given
@@ -264,8 +285,12 @@ def plot_field_comparison(
     Returns the list of saved paths: comparisons and profiles in PINN
     time order, then the relative L2 error plot.
     """
-    pinn = np.load(evaluation_path)
-    fem = np.load(fem_fields_path)
+    # Read each array once: indexing an open NpzFile re-reads the whole array
+    # from the zip on every access, and the loop below indexes per time.
+    with np.load(evaluation_path) as f:
+        pinn = dict(f)
+    with np.load(fem_fields_path) as f:
+        fem = dict(f)
 
     if pinn["x"].shape != fem["x"].shape or not np.allclose(pinn["x"], fem["x"]) or not np.allclose(
         pinn["y"], fem["y"]
@@ -275,34 +300,57 @@ def plot_field_comparison(
             "-- re-run src/pinn/evaluate.py with --nx/--ny matching the FEM run's."
         )
 
+    fem_t = fem["t"]
+    if train_args is not None and fem_t[0] == 0.0:
+        # Runs from before --ic existed all used the cross.
+        ic = train_args.get("ic") or "cross"
+        expected = initial_condition(
+            ic, fem["x"], fem["y"], epsilon=train_args["epsilon"], seed=train_args.get("ic_seed", 0)
+        )
+        mismatch = relative_l2_error(fem["u"][0], expected)
+        if mismatch > FEM_IC_MISMATCH:
+            warnings.warn(
+                f"{fem_fields_path} does not start from this run's initial condition "
+                f"(ic={ic}, epsilon={train_args['epsilon']:g}, seed={train_args.get('ic_seed', 0)}): "
+                f"relative L2 distance {mismatch:.1%} at t=0. The comparison is against a "
+                "different setup -- pick the FEM run made with the same --ic/--epsilon/--seed."
+            )
+
     # One shared symmetric mu scale for PINN and FEM, as in plot_evaluation.
     mu_bound = max(float(np.quantile(np.abs(fem["mu"]), 0.99)), 1e-12)
     mu_kwargs = dict(vmin=-mu_bound, vmax=mu_bound, cmap="RdBu_r", colorbar_label="mu")
 
     saved = []
-    fem_t = fem["t"]
     errors = {"u": np.full(len(pinn["t"]), np.nan), "mu": np.full(len(pinn["t"]), np.nan)}
     for idx, t_val in enumerate(pinn["t"]):
         fem_idx = int(np.argmin(np.abs(fem_t - t_val)))
         matched_t = fem_t[fem_idx]
+        title = f"t = {t_val:g}"
         if abs(matched_t - t_val) > 1e-9:
             warnings.warn(
                 f"PINN t={t_val:g} has no exact FEM snapshot; using closest one "
                 f"at t={matched_t:g} instead"
             )
-        fig, _ = plot_comparison(pinn["x"], pinn["y"], pinn["u"][idx], fem["u"][fem_idx])
+            title += f" (FEM at t = {matched_t:g})"
+        fig, _ = plot_comparison(pinn["x"], pinn["y"], pinn["u"][idx], fem["u"][fem_idx], title=title)
         path = os.path.join(output_dir, f"comparison_{idx:03d}_t{t_val:g}.{fmt}")
         fig.savefig(path, dpi=dpi, bbox_inches="tight")
         plt.close(fig)
         saved.append(path)
 
-        fig, _ = plot_comparison(
-            pinn["x"], pinn["y"], pinn["mu"][idx], fem["mu"][fem_idx], **mu_kwargs
-        )
-        path = os.path.join(output_dir, f"comparison_mu_{idx:03d}_t{t_val:g}.{fmt}")
-        fig.savefig(path, dpi=dpi, bbox_inches="tight")
-        plt.close(fig)
-        saved.append(path)
+        if np.any(fem["mu"][fem_idx]):
+            fig, _ = plot_comparison(
+                pinn["x"], pinn["y"], pinn["mu"][idx], fem["mu"][fem_idx], title=title, **mu_kwargs
+            )
+            path = os.path.join(output_dir, f"comparison_mu_{idx:03d}_t{t_val:g}.{fmt}")
+            fig.savefig(path, dpi=dpi, bbox_inches="tight")
+            plt.close(fig)
+            saved.append(path)
+        else:
+            warnings.warn(
+                f"FEM mu is identically zero at t={matched_t:g} (the solver only sets u at "
+                f"t=0); skipping comparison_mu_{idx:03d} and the mu error at t={t_val:g}"
+            )
 
         fig, _ = plot_line_profile(
             pinn["x"], pinn["y"], pinn["u"][idx], fem["u"][fem_idx],
@@ -335,8 +383,10 @@ def plot_training_history(
 
     Returns the saved path.
     """
-    history = torch.load(checkpoint_path, map_location="cpu")["history"]
-    ax = plot_loss_history(history)
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    history = checkpoint["history"]
+    adam_steps = adam_step_count(checkpoint["args"], history, checkpoint.get("adam_steps"))
+    ax = plot_loss_history(history, adam_steps=adam_steps)
     path = os.path.join(output_dir, f"loss_history.{fmt}")
     ax.figure.savefig(path, dpi=dpi, bbox_inches="tight")
     plt.close(ax.figure)
@@ -378,6 +428,7 @@ def write_run_summary(checkpoint_path: str, output_dir: str) -> str:
         model_state=checkpoint["model_state"],
         history=checkpoint["history"],
         source=os.path.abspath(checkpoint_path),
+        adam_steps=checkpoint.get("adam_steps"),
     )
     path = os.path.join(output_dir, "run_summary.txt")
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
@@ -408,8 +459,10 @@ def plot_diagnostics(
         if t_p is not None:
             # A FEM run's own time window is typically much longer than a
             # PINN run's t_max -- clip so the PINN curve isn't compressed
-            # to a single pixel against it.
-            keep = t_f <= t_p[-1]
+            # to a single pixel against it. With a tolerance: the FEM's
+            # accumulated t (0.009999999999999995) and a PINN t_max that went
+            # through float32 (0.009999999776) both mean t = 0.01.
+            keep = (t_f <= t_p[-1]) | np.isclose(t_f, t_p[-1], rtol=1e-6, atol=0.0)
             if keep.sum() < 2:
                 warnings.warn(
                     f"FEM diagnostics has {int(keep.sum())} sample(s) at t <= {t_p[-1]:g}; "
@@ -465,6 +518,9 @@ if __name__ == "__main__":
             fmt=cli_args.format,
         )
     if cli_args.fem_fields is not None:
+        train_args = None
+        if cli_args.checkpoint is not None:
+            train_args = torch.load(cli_args.checkpoint, map_location="cpu")["args"]
         saved_paths += plot_field_comparison(
             cli_args.evaluation,
             cli_args.fem_fields,
@@ -473,6 +529,7 @@ if __name__ == "__main__":
             profile_x=cli_args.profile_x,
             fmt=cli_args.format,
             profile_y=cli_args.profile_y,
+            train_args=train_args,
         )
 
     for path in saved_paths:

@@ -79,25 +79,47 @@ def count_parameters(model_state: Mapping[str, Any]) -> int:
     return sum(int(v.numel()) for k, v in model_state.items() if k not in _STATE_DICT_BUFFERS)
 
 
-def _format_training_block(args: dict, history: dict[str, list[float]]) -> list[str]:
-    total_steps = len(history["total"]) if "total" in history else 0
-    expected_adam = 5 if args.get("smoke_test") else args.get("epochs", 0)
+def adam_step_count(args: dict, history: dict[str, list[float]], adam_steps: int | None = None) -> int | None:
+    """How many leading entries of a checkpoint's history are Adam epochs
+    (the rest are L-BFGS closure evaluations).
+
+    Args:
+        args: the checkpoint's "args".
+        history: the checkpoint's "history".
+        adam_steps: the checkpoint's "adam_steps" entry, which train.py
+            records; exact, so it wins when given.
+
+    Returns:
+        The count, or None when it can't be known: a checkpoint from before
+        train.py recorded it, trained with --adam-patience, may have stopped
+        Adam before --epochs.
+    """
+    if adam_steps is not None:
+        return adam_steps
+    if args.get("adam_patience"):
+        return None
+    total_steps = len(history.get("total", []))
     # Clamp: a checkpoint saved mid-Adam (via --checkpoint-every) has fewer
-    # than expected_adam steps recorded, and total_steps must never be
-    # exceeded here or lbfgs_evals would go negative.
-    adam_steps = min(total_steps, expected_adam)
-    lbfgs_evals = total_steps - adam_steps
+    # than --epochs steps recorded.
+    return min(total_steps, 5 if args.get("smoke_test") else args.get("epochs", 0))
+
+
+def _format_training_block(
+    args: dict, history: dict[str, list[float]], adam_steps: int | None = None
+) -> list[str]:
+    total_steps = len(history["total"]) if "total" in history else 0
+    adam_steps = adam_step_count(args, history, adam_steps)
 
     lines = [
         "training:",
         f"  recorded steps: {total_steps}",
-        f"  adam steps: {adam_steps}",
+        f"  adam steps: {'unknown' if adam_steps is None else adam_steps}",
         # LBFGS(max_iter=20).step(closure) invokes the closure ~20x per call
         # (line-search + gradient evals), and train.py's closure records
         # every invocation -- so this is NOT the same as --lbfgs-steps.
         # It can also fall short of 20x --lbfgs-steps: train.py stops early
         # once the total loss stalls (--lbfgs-patience).
-        f"  lbfgs closure evals: {lbfgs_evals}",
+        f"  lbfgs closure evals: {'unknown' if adam_steps is None else total_steps - adam_steps}",
     ]
     for name in _LOSS_TERM_ORDER:
         values = history.get(name)
@@ -113,6 +135,7 @@ def format_run_summary(
     model_state: Mapping[str, Any] | None = None,
     history: dict[str, list[float]] | None = None,
     source: str | None = None,
+    adam_steps: int | None = None,
 ) -> str:
     """Format a checkpoint's settings and results into a readable run summary.
 
@@ -128,6 +151,9 @@ def format_run_summary(
             term's final value.
         source: optional path (or other identifier) of the checkpoint this
             summary was built from, printed as the first line.
+        adam_steps: optional "adam_steps" entry from the same checkpoint,
+            for the Adam/L-BFGS split of the training block (see
+            adam_step_count).
 
     Returns:
         Multi-line string grouping network size, domain/epsilon, sampling
@@ -161,7 +187,7 @@ def format_run_summary(
         lines.append("")
 
     if history is not None:
-        lines.extend(_format_training_block(args, history))
+        lines.extend(_format_training_block(args, history, adam_steps))
 
     leftover = [key for key in args if key not in grouped_keys and key not in _RUN_SUMMARY_EXCLUDED]
     if leftover:

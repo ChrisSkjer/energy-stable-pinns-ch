@@ -182,7 +182,9 @@ if __name__ == "__main__":
     print(f"using epsilon = {epsilon:g}")
 
     model = load_model(cli_args.checkpoint_path, device=cli_args.device)
-    t_max = cli_args.t_max if cli_args.t_max is not None else model.upper_bound[2].item()
+    # From the args, not model.upper_bound: that buffer is float32, which
+    # turns t_max=0.01 into 0.009999999776 in the CSV.
+    t_max = cli_args.t_max if cli_args.t_max is not None else train_args["t_max"]
     t_values = np.linspace(0.0, t_max, cli_args.nt)
 
     t_out, energy_out, mass_out = diagnostics_over_time(

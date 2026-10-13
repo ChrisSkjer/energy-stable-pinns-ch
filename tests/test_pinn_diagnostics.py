@@ -1,6 +1,8 @@
 """Tests for src.pinn.diagnostics."""
 
 import numpy as np
+import pytest
+import torch
 
 
 def test_import():
@@ -49,6 +51,57 @@ def test_field_and_gradient_matches_finite_differences():
     fd_dudx = np.gradient(u, h, axis=0)
     interior = np.s_[5:-5, 5:-5]
     assert np.allclose(grad_u[..., 0][interior], fd_dudx[interior], rtol=0.05, atol=1e-2)
+
+
+class _Front(torch.nn.Module):
+    """A stand-in PINN with a known u: the equilibrium tanh front
+    u = tanh((x - x0(t)) / (sqrt(2) eps)), x0 = 0.5 + 10 t, moving in x."""
+
+    def __init__(self, epsilon):
+        super().__init__()
+        self.width = np.sqrt(2.0) * epsilon
+        self.register_buffer("lower_bound", torch.zeros(3))
+        self.register_buffer("upper_bound", torch.tensor([1.0, 1.0, 0.01]))
+
+    def forward(self, p):
+        u = torch.tanh((p[:, 0:1] - 0.5 - 10 * p[:, 2:3]) / self.width)
+        return torch.cat([u, torch.zeros_like(u)], dim=1)
+
+
+def test_field_and_gradient_columns_are_du_dx_then_du_dy():
+    from src.pinn.diagnostics import field_and_gradient
+
+    class Plane(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.register_buffer("lower_bound", torch.zeros(3))
+            self.register_buffer("upper_bound", torch.ones(3))
+
+        def forward(self, p):
+            u = 2 * p[:, 0:1] + 3 * p[:, 1:2] + 5 * p[:, 2:3]
+            return torch.cat([u, 7 * u], dim=1)  # mu must not leak into grad u
+
+    u, grad_u = field_and_gradient(Plane(), t=0.5, nx=4, ny=3)
+    X, Y = np.meshgrid(np.linspace(0, 1, 4), np.linspace(0, 1, 3), indexing="ij")
+    np.testing.assert_allclose(u, 2 * X + 3 * Y + 2.5, rtol=1e-6)
+    np.testing.assert_allclose(grad_u[..., 0], 2.0, rtol=1e-6)
+    np.testing.assert_allclose(grad_u[..., 1], 3.0, rtol=1e-6)
+
+
+def test_diagnostics_over_time_match_the_analytic_front():
+    """Energy of the equilibrium front is its surface tension times its length,
+    2*sqrt(2)*eps/3 * 1; mass is the integral of the tanh, w*ln(cosh((1-x0)/w)/cosh(x0/w))."""
+    from src.pinn.diagnostics import diagnostics_over_time
+
+    eps = 0.05
+    model = _Front(eps)
+    t, energy, mass = diagnostics_over_time(model, np.array([0.0, 0.01]), nx=201, ny=201, epsilon=eps)
+
+    np.testing.assert_allclose(energy, 2 * np.sqrt(2) * eps / 3, rtol=2e-3)
+    w = model.width
+    x0 = 0.5 + 10 * t
+    np.testing.assert_allclose(mass, w * np.log(np.cosh((1 - x0) / w) / np.cosh(x0 / w)), atol=2e-6)
+    assert mass[1] == pytest.approx(-0.2, abs=1e-3)  # front moved right: more of the -1 phase
 
 
 def test_diagnostics_over_time_shapes():

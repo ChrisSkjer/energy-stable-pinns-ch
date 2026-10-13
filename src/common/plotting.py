@@ -17,6 +17,11 @@ import numpy as np
 
 from src.common.metrics import relative_l2_error
 
+# x axis of every plot indexed like a checkpoint's history: one entry per Adam
+# epoch, then one per L-BFGS closure call -- line-search trial points
+# included, which is why the L-BFGS part of a loss curve can spike.
+STEP_LABEL = "step (Adam epochs, then L-BFGS loss evaluations)"
+
 
 def phase_colormap():
     """Diverging blue<->red colormap for c/u in [-1, 1], neutral gray at 0.
@@ -73,7 +78,11 @@ def plot_field(
         x, y, c, cmap=(phase_colormap() if cmap is None else cmap), vmin=vmin, vmax=vmax, shading="auto",
         rasterized=True,  # one embedded image in PDF output, not one vector quad per cell
     )
-    cbar = ax.figure.colorbar(mesh, ax=ax)
+    # Cells outside [vmin, vmax] are drawn in the end colours, so without an
+    # arrow on the colour bar a u of 1.3 would read as 1.0.
+    below, above = np.nanmin(c) < vmin, np.nanmax(c) > vmax
+    extend = "both" if below and above else "min" if below else "max" if above else "neither"
+    cbar = ax.figure.colorbar(mesh, ax=ax, extend=extend)
     if colorbar_label is not None:
         cbar.set_label(colorbar_label)
     ax.set_aspect("equal")
@@ -90,12 +99,14 @@ def plot_comparison(
     c_pinn: np.ndarray,
     c_fem: np.ndarray,
     epsilon: float | None = None,
+    title: str | None = None,
     **field_kwargs,
 ):
     """Side-by-side PINN field, FEM field, and their difference, at one time snapshot.
 
-    Extra field_kwargs (vmin, vmax, cmap, colorbar_label) go to plot_field
-    for the PINN and FEM panels, e.g. to plot mu instead of u.
+    title (e.g. "t = 0.005") and epsilon go into the figure title. Extra
+    field_kwargs (vmin, vmax, cmap, colorbar_label) go to plot_field for the
+    PINN and FEM panels, e.g. to plot mu instead of u.
 
     Visual counterpart to metrics.relative_l2_error, whose value is shown
     in the difference panel's title so each figure carries its own number.
@@ -134,7 +145,9 @@ def plot_comparison(
         ax_diff.set_title("PINN - FEM")
 
     if epsilon is not None:
-        fig.suptitle(f"epsilon = {epsilon:g}")
+        title = f"{title}, epsilon = {epsilon:g}" if title else f"epsilon = {epsilon:g}"
+    if title is not None:
+        fig.suptitle(title)
 
     return fig, (ax_pinn, ax_fem, ax_diff)
 
@@ -241,7 +254,7 @@ def plot_heldout_residual(
             ax.semilogy(train, lw=1, alpha=0.4, color=color, label=f"{name} (training points)")
         ax.semilogy(heldout["step"], heldout[name], lw=2, marker=".", color=color, label=f"{name} (held-out)")
 
-    ax.set_xlabel("optimizer step")
+    ax.set_xlabel(STEP_LABEL)
     ax.set_ylabel("unweighted residual (MSE)")
     ax.set_title("PDE residual: training vs. held-out points")
     ax.grid(True, which="both", alpha=0.3)
@@ -283,7 +296,7 @@ def plot_relative_l2_error(
     return ax
 
 
-def plot_loss_history(history: dict[str, list[float]], ax=None):
+def plot_loss_history(history: dict[str, list[float]], ax=None, adam_steps: int | None = None):
     """Plot per-term PINN training loss curves (log scale) vs. optimizer step.
 
     Args:
@@ -296,9 +309,11 @@ def plot_loss_history(history: dict[str, list[float]], ax=None):
             before the PDE split have a single "pde" key instead); each component's values already include its
             --*-weight multiplier, i.e. these are the same numbers
             train.py prints during training, not the raw unweighted terms.
-            Adam and L-BFGS steps are appended to the same flat lists, so
-            there's no marker here for where L-BFGS refinement takes over.
+            Adam and L-BFGS steps are appended to the same flat lists.
         ax: existing matplotlib axes to draw on, or None to create a new figure.
+        adam_steps: how many leading entries are Adam epochs (see
+            run_summary.adam_step_count); draws a dotted line where L-BFGS
+            takes over. None draws no line.
 
     Returns:
         The axes the loss curves were drawn on.
@@ -315,8 +330,10 @@ def plot_loss_history(history: dict[str, list[float]], ax=None):
             ax.semilogy(history[name], lw=1.5, alpha=0.8, label=name)
     if "total" in history:
         ax.semilogy(history["total"], lw=2.5, color="black", label="total")
+    if adam_steps is not None and 0 < adam_steps < len(history.get("total", [])):
+        ax.axvline(adam_steps, lw=1, ls=":", color="0.4", label="Adam -> L-BFGS")
 
-    ax.set_xlabel("optimizer step")
+    ax.set_xlabel(STEP_LABEL)
     ax.set_ylabel("weighted loss")
     ax.set_title("Training loss")
     ax.grid(True, which="both", alpha=0.3)
