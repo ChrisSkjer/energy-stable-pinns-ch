@@ -49,6 +49,8 @@ the run name typed once. It changes no defaults.
 | `--device` | `cpu` | `cuda` if you're running this on Colab |
 | `--fem-diagnostics PATH` | none | Overlays a FEM reference on the energy/mass plots |
 | `--fem-fields PATH` | none | PINN-vs-FEM comparison plots of u and mu, plus relative L2 error vs. t; evaluates on the FEM file's grid, so `--nx`/`--ny` match automatically |
+| `--profile-x X` | `0.25` | With `--fem-fields`: line slice of u along the vertical line `x = X` (`profile_*`) |
+| `--profile-y Y` | none | With `--fem-fields`: slice along the horizontal line `y = Y` instead; overrides `--profile-x` |
 
 ```powershell
 .venv\Scripts\python.exe scripts\analyze_run.py $run --fem-diagnostics results/eps0.05_nx96_dt2e-4/cahn_hilliard_diagnostics.csv
@@ -120,6 +122,8 @@ to get everything in one folder.
 | `--diagnostics <csv>` | `energy_dissipation.png`, `mass_conservation.png` |
 | `--fem-diagnostics <csv>` | FEM reference overlaid on those same two plots |
 | `--fem-fields <npz>` | `comparison_<idx>_t<val>.png` + `comparison_mu_<idx>_t<val>.png` (relative L2 error in the diff panel's title), and `relative_l2_error.png` — requires `--evaluation` |
+| `--profile-x X` | with `--fem-fields`: `profile_<idx>_t<val>.png`, u along the vertical line `x = X` (default `0.25`), PINN and FEM on one axis |
+| `--profile-y Y` | same, along the horizontal line `y = Y` instead; overrides `--profile-x` |
 | `--output-dir` | defaults to `plots/` inside the inferred run folder |
 | `--dpi` | `150` |
 
@@ -173,6 +177,20 @@ Requirements, all of which will bite otherwise:
   `1e-9` emits a warning naming both times. FEM snapshot spacing is
   `--viz-every` steps.
 
+**Line slice** — the same `--fem-fields` call also writes one
+`profile_<idx>_t<val>.png` per time: the FEM field with the line dashed in,
+next to u along that line for PINN and FEM (grey lines at ±1). Use it to
+compare interface width, steepness and over/undershoot, which the 2D panels
+hide. Pick the line with `--profile-x X` (vertical, default `0.25`) or
+`--profile-y Y` (horizontal, wins over `--profile-x`); both snap to the
+nearest grid line, and the plot title shows the snapped value. For
+`--ic two_circles`, `--profile-y 0.5` goes through both circles:
+
+```powershell
+.venv\Scripts\python.exe scripts\analyze_run.py $run `
+  --fem-fields results/eps0.05_nx100_dte-4_two_cricles/fem_fields.npz --profile-y 0.5
+```
+
 Besides one comparison PNG per time, this writes `relative_l2_error.png`:
 `metrics.relative_l2_error` (‖PINN − FEM‖₂ / ‖FEM‖₂) for u and mu against t,
 on a log axis. Same number as in each comparison's diff-panel title. Reading it:
@@ -217,6 +235,7 @@ results/pinn_models/<run-name>/
     ├── energy_dissipation.png
     ├── mass_conservation.png
     ├── comparison_000_t0.png, comparison_mu_000_t0.png ...   # only with --fem-fields
+    ├── profile_000_t0.png ...                                 # only with --fem-fields
     └── relative_l2_error.png                                  # only with --fem-fields
 ```
 

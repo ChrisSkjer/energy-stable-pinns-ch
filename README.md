@@ -318,6 +318,17 @@ evaluated on that file's grid, so `--nx`/`--ny` match without you setting them:
 .venv\Scripts\python.exe scripts\analyze_run.py demo_run --fem-diagnostics results/eps0.05_nx100_t0.005_compare/cahn_hilliard_diagnostics.csv --fem-fields results/eps0.05_nx100_t0.005_compare/fem_fields.npz
 ```
 
+With `--fem-fields` you also get a line slice through the solution: u along
+one straight line, PINN and FEM on one axis, to see the shape of the
+interface. `--profile-x X` (default `0.25`) picks the vertical line `x = X`;
+`--profile-y Y` picks the horizontal line `y = Y` instead (it wins if both
+are given). Values are snapped to the nearest grid column/row. For the
+`two_circles` initial condition, `--profile-y 0.5` cuts through both circles:
+
+```powershell
+.venv\Scripts\python.exe scripts\analyze_run.py demo_run --fem-fields results/eps0.05_nx100_dte-4_two_cricles/fem_fields.npz --profile-y 0.5
+```
+
 The default `--t` is `0.0 0.001 0.005`, which only fits runs trained with the
 default `--t-max 0.005`. For a shorter run, pass `--t` values inside its
 window, e.g. `--t 0.0 0.0005 0.001` for a `--t-max 0.001` run.
@@ -418,6 +429,11 @@ stdout):
   matched to the closest FEM snapshot time (only if `--fem-fields` was passed, which also requires
   `--evaluation`). Needs a `fem_fields.npz` from a FEM run with `save_fields`
   on, evaluated on the same `(x, y)` grid — i.e. matching `--nx`/`--ny`.
+- `profile_<idx>_t<value>.pdf` — line slice of u, one per evaluation time
+  (only with `--fem-fields`), via `src/common/plotting.py::plot_line_profile`:
+  left the FEM field with the line dashed in, right PINN and FEM u along that
+  line. The line is `x = --profile-x` (default `0.25`), or `y = --profile-y`
+  if given; both snap to the nearest grid line.
 
 See [docs/post_training_cheatsheet.md](docs/post_training_cheatsheet.md) for
 all of the above condensed into one command reference — every flag, its
