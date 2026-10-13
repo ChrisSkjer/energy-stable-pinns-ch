@@ -434,6 +434,9 @@ stdout):
   left the FEM field with the line dashed in, right PINN and FEM u along that
   line. The line is `x = --profile-x` (default `0.25`), or `y = --profile-y`
   if given; both snap to the nearest grid line.
+- `relative_l2_error.pdf` — relative L2 error ‖PINN − FEM‖₂ / ‖FEM‖₂ of u
+  and mu against t, on a log axis, one point per evaluation time (only with
+  `--fem-fields`); the same number is in each comparison's diff-panel title.
 
 See [docs/post_training_cheatsheet.md](docs/post_training_cheatsheet.md) for
 all of the above condensed into one command reference — every flag, its

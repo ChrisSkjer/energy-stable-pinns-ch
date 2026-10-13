@@ -51,6 +51,8 @@ the run name typed once. It changes no defaults.
 | `--fem-fields PATH` | none | PINN-vs-FEM comparison plots of u and mu, plus relative L2 error vs. t; evaluates on the FEM file's grid, so `--nx`/`--ny` match automatically |
 | `--profile-x X` | `0.25` | With `--fem-fields`: line slice of u along the vertical line `x = X` (`profile_*`) |
 | `--profile-y Y` | none | With `--fem-fields`: slice along the horizontal line `y = Y` instead; overrides `--profile-x` |
+| `--field-plots` | off | Also save the PINN u and mu field snapshots |
+| `--format` | `pdf` | `png` or `pdf`, passed on to `plot_results` |
 
 ```powershell
 .venv\Scripts\python.exe scripts\analyze_run.py $run --fem-diagnostics results/eps0.05_nx96_dt2e-4/cahn_hilliard_diagnostics.csv
@@ -117,21 +119,25 @@ to get everything in one folder.
 | Flag | Produces |
 | --- | --- |
 | `--evaluation <npz>` | nothing on its own; input for `--fem-fields` and `--field-plots` |
-| `--field-plots` | `field_u_<idx>_t<val>.png`, `field_mu_<idx>_t<val>.png` (one each per saved time) — requires `--evaluation` |
-| `--checkpoint <pt>` | `loss_history.png` + `run_summary.txt` |
-| `--diagnostics <csv>` | `energy_dissipation.png`, `mass_conservation.png` |
+| `--field-plots` | `field_u_<idx>_t<val>.pdf`, `field_mu_<idx>_t<val>.pdf` (one each per saved time) — requires `--evaluation` |
+| `--checkpoint <pt>` | `loss_history.pdf` + `run_summary.txt` |
+| `--diagnostics <csv>` | `energy_dissipation.pdf`, `mass_conservation.pdf` |
 | `--fem-diagnostics <csv>` | FEM reference overlaid on those same two plots |
-| `--fem-fields <npz>` | `comparison_<idx>_t<val>.png` + `comparison_mu_<idx>_t<val>.png` (relative L2 error in the diff panel's title), and `relative_l2_error.png` — requires `--evaluation` |
-| `--profile-x X` | with `--fem-fields`: `profile_<idx>_t<val>.png`, u along the vertical line `x = X` (default `0.25`), PINN and FEM on one axis |
+| `--fem-fields <npz>` | `comparison_<idx>_t<val>.pdf` + `comparison_mu_<idx>_t<val>.pdf` (relative L2 error in the diff panel's title), and `relative_l2_error.pdf` — requires `--evaluation` |
+| `--profile-x X` | with `--fem-fields`: `profile_<idx>_t<val>.pdf`, u along the vertical line `x = X` (default `0.25`), PINN and FEM on one axis |
 | `--profile-y Y` | same, along the horizontal line `y = Y` instead; overrides `--profile-x` |
 | `--output-dir` | defaults to `plots/` inside the inferred run folder |
-| `--dpi` | `150` |
+| `--format` | `pdf` (default) or `png`; every plot below is written in that format |
+| `--dpi` | `300` for pdf (resolution of the rasterized fields inside), `150` for png |
 
 Two auto-detection rules worth remembering:
 
 - `--diagnostics` omitted → a `diagnostics.csv` in the run folder is picked up
   automatically when present.
-- `--fem-diagnostics` is **never** auto-detected. Always pass it explicitly.
+- `--fem-diagnostics` omitted but `--fem-fields` given → the
+  `cahn_hilliard_diagnostics.csv` next to that `fem_fields.npz` is picked up
+  when present. Without `--fem-fields` it is never auto-detected, so pass it
+  explicitly.
 
 `run_summary.txt` is the text artifact that's easy to forget exists: network
 size, domain, sampling, optimizer, loss weights, trainable parameter count, and
@@ -178,7 +184,7 @@ Requirements, all of which will bite otherwise:
   `--viz-every` steps.
 
 **Line slice** — the same `--fem-fields` call also writes one
-`profile_<idx>_t<val>.png` per time: the FEM field with the line dashed in,
+`profile_<idx>_t<val>.pdf` per time: the FEM field with the line dashed in,
 next to u along that line for PINN and FEM (grey lines at ±1). Use it to
 compare interface width, steepness and over/undershoot, which the 2D panels
 hide. Pick the line with `--profile-x X` (vertical, default `0.25`) or
@@ -191,7 +197,7 @@ nearest grid line, and the plot title shows the snapped value. For
   --fem-fields results/eps0.05_nx100_dte-4_two_cricles/fem_fields.npz --profile-y 0.5
 ```
 
-Besides one comparison PNG per time, this writes `relative_l2_error.png`:
+Besides one comparison plot per time, this writes `relative_l2_error.pdf`:
 `metrics.relative_l2_error` (‖PINN − FEM‖₂ / ‖FEM‖₂) for u and mu against t,
 on a log axis. Same number as in each comparison's diff-panel title. Reading it:
 
@@ -228,15 +234,15 @@ results/pinn_models/<run-name>/
 ├── evaluation.npz                  # step 2a
 ├── diagnostics.csv                 # step 2b
 └── plots/                          # step 2c
-    ├── field_u_000_t0.png ...
-    ├── field_mu_000_t0.png ...
-    ├── loss_history.png
+    ├── field_u_000_t0.pdf ...                                # only with --field-plots
+    ├── field_mu_000_t0.pdf ...                               # only with --field-plots
+    ├── loss_history.pdf
     ├── run_summary.txt
-    ├── energy_dissipation.png
-    ├── mass_conservation.png
-    ├── comparison_000_t0.png, comparison_mu_000_t0.png ...   # only with --fem-fields
-    ├── profile_000_t0.png ...                                 # only with --fem-fields
-    └── relative_l2_error.png                                  # only with --fem-fields
+    ├── energy_dissipation.pdf
+    ├── mass_conservation.pdf
+    ├── comparison_000_t0.pdf, comparison_mu_000_t0.pdf ...   # only with --fem-fields
+    ├── profile_000_t0.pdf ...                                 # only with --fem-fields
+    └── relative_l2_error.pdf                                  # only with --fem-fields
 ```
 
 ## Gotchas
@@ -249,8 +255,8 @@ results/pinn_models/<run-name>/
   overriding it. A mismatch produces a plausible-looking wrong energy curve.
 - **Re-plotting is cheap, re-running diagnostics isn't.** `plot_results` reads
   `diagnostics.csv` from disk; only re-run step 2b when the checkpoint changes.
-- **`--fem-diagnostics` is never auto-detected**, unlike the PINN's own
-  `diagnostics.csv`.
+- **`--fem-diagnostics` is only auto-detected next to `--fem-fields`.** For an
+  energy/mass overlay without the field comparison, pass it explicitly.
 - **A stale `evaluation.npz`.** It's overwritten in place per run folder, so a
   comparison plot against an old `.npz` looks fine and is wrong. Re-run 2a after
   pulling a newer checkpoint into the same run name.
