@@ -23,7 +23,8 @@ from src.pinn.losses import (
 )
 from src.pinn.model import PINN
 from src.pinn.run_paths import checkpoints_dir_for, final_path_for, run_dir_for
-from src.pinn.sampling import TrainingPoints, sample_points
+from src.pinn.collocation import COLLOCATION_STRATEGIES, RESAMPLABLE, heldout_points, make_sampler
+from src.pinn.sampling import TrainingPoints, sample_points, with_pde_at_t0
 
 
 def parse_args() -> argparse.Namespace:
@@ -129,7 +130,56 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--x-max", type=float, default=1.0, help="Domain upper bound in x (lower is 0)")
     parser.add_argument("--y-max", type=float, default=1.0, help="Domain upper bound in y (lower is 0)")
     parser.add_argument("--t-max", type=float, default=5e-3, help="Domain upper bound in t (lower is 0)")
-    parser.add_argument("--n-collocation", type=int, default=10000, help="Random interior PDE points")
+    parser.add_argument(
+        "--n-collocation",
+        type=int,
+        default=10000,
+        help="Interior PDE points (for --collocation grid: only picks the "
+        "default --grid-shape, round(n^(1/3)) per axis)",
+    )
+    parser.add_argument(
+        "--collocation",
+        type=str,
+        default="random",
+        choices=sorted(COLLOCATION_STRATEGIES),
+        help="Collocation point strategy (see src/pinn/collocation.py): "
+        "'random' (independent uniform draws), 'sobol' (scrambled Sobol "
+        "quasi-random, more evenly spread), 'grid' (cell-centred regular "
+        "(x, y, t) grid).",
+    )
+    parser.add_argument(
+        "--resample-every",
+        type=int,
+        default=0,
+        help="Redraw the interior collocation points every this many Adam "
+        "epochs (random/sobol only; 0 = never). L-BFGS always keeps the "
+        "last set fixed: its line search needs a deterministic loss.",
+    )
+    parser.add_argument(
+        "--grid-shape",
+        type=int,
+        nargs=3,
+        default=None,
+        metavar=("NX", "NY", "NT"),
+        help="Points per axis for --collocation grid. Defaults to "
+        "round(n_collocation^(1/3)) on each axis.",
+    )
+    parser.add_argument(
+        "--sampling-seed",
+        type=int,
+        default=0,
+        help="Seed for the collocation draw (and the t=0 PDE point choice), "
+        "so a run's points can be reproduced.",
+    )
+    parser.add_argument(
+        "--heldout-every",
+        type=int,
+        default=0,
+        help="Log the unweighted PDE residuals on a fixed set of fresh points "
+        "(never trained on) every this many Adam epochs and L-BFGS steps. "
+        "0 = off. Stored under the checkpoint's 'heldout' key.",
+    )
+    parser.add_argument("--heldout-n", type=int, default=20000, help="Number of held-out points")
     parser.add_argument("--n-ic", type=int, default=100, help="Side length of the IC point grid")
     parser.add_argument("--n-bc", type=int, default=100, help="Side length of the BC point grid, per edge")
     parser.add_argument(
@@ -154,7 +204,12 @@ def parse_args() -> argparse.Namespace:
         "results/pinn_models/<run-name>/. Defaults to a timestamp.",
     )
     parser.add_argument("--smoke-test", action="store_true", help="Run a handful of iterations only")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.resample_every and args.collocation not in RESAMPLABLE:
+        parser.error(f"--resample-every needs a random strategy, not --collocation {args.collocation}")
+    if args.grid_shape is not None and args.collocation != "grid":
+        parser.error("--grid-shape only applies to --collocation grid")
+    return args
 
 
 def is_improvement(total: float, best: float | None, tol: float) -> bool:
@@ -201,10 +256,25 @@ def train(args: argparse.Namespace) -> None:
     n_collocation = 100 if args.smoke_test else args.n_collocation
     n_ic = 10 if args.smoke_test else args.n_ic
     n_bc = 10 if args.smoke_test else args.n_bc
+    # Seeds the t=0 PDE point choice in sample_points; the collocation
+    # samplers carry their own generators.
+    torch.manual_seed(args.sampling_seed)
+    sampler = make_sampler(
+        args.collocation,
+        lower,
+        upper,
+        n_collocation,
+        seed=args.sampling_seed,
+        resample_every=args.resample_every,
+        grid_shape=args.grid_shape,
+        device=device,
+    )
+    collocation = sampler.sample()
+    print(f"collocation: {args.collocation}, {collocation.shape[0]} interior points")
     points = sample_points(
         lower=lower,
         upper=upper,
-        n_collocation=n_collocation,
+        collocation=collocation,
         n_ic=n_ic,
         n_bc=n_bc,
         device=device,
@@ -249,6 +319,20 @@ def train(args: argparse.Namespace) -> None:
         for name, value in losses.items():
             history.setdefault(name, []).append(value.item())
 
+    # Unweighted PDE residuals on fixed fresh points, against the history
+    # step they were taken at -- the training loss alone can't show the
+    # network overfitting its own collocation points.
+    heldout: dict[str, list[float]] | None = None
+    if args.heldout_every:
+        heldout = {"step": [], "pde_u": [], "pde_mu": []}
+        x_heldout = heldout_points(lower, upper, args.heldout_n, seed=args.sampling_seed + 1, device=device)
+
+    def record_heldout() -> None:
+        loss_u, loss_mu = pde_residual_losses(model, x_heldout, epsilon=args.epsilon)
+        heldout["step"].append(len(history["total"]))
+        heldout["pde_u"].append(loss_u.item())
+        heldout["pde_mu"].append(loss_mu.item())
+
     best_adam_total: float | None = None
     best_adam_state: dict[str, torch.Tensor] | None = None
     adam_stalled = 0
@@ -266,9 +350,15 @@ def train(args: argparse.Namespace) -> None:
         lr = optimizer.param_groups[0]["lr"]
         if epoch % args.log_every == 0 or epoch == epochs - 1:
             print(f"[adam] epoch {epoch:5d}/{epochs} lr {lr:.2e} {format_losses(losses)}")
+        if heldout is not None and (epoch % args.heldout_every == 0 or epoch == epochs - 1):
+            record_heldout()
         if epoch % args.checkpoint_every == 0:
             checkpoint_path = os.path.join(checkpoints_dir, f"checkpoint_step{len(history['total']):06d}.pt")
-            save_checkpoint(model, checkpoint_path, args, history)
+            save_checkpoint(model, checkpoint_path, args, history, heldout)
+
+        new_collocation = sampler.update(model, epoch + 1)
+        if new_collocation is not None:
+            points.collocation = with_pde_at_t0(new_collocation, points.t0_points)
 
         if scheduler is not None:
             scheduler.step(total)
@@ -312,9 +402,11 @@ def train(args: argparse.Namespace) -> None:
     for lbfgs_step in range(lbfgs_steps):
         lbfgs.step(closure)
         print(f"[lbfgs] step {lbfgs_step + 1:3d}/{lbfgs_steps} {format_losses(last_losses)}")
+        if heldout is not None and (lbfgs_step + 1) % args.heldout_every == 0:
+            record_heldout()
         if lbfgs_step % args.checkpoint_every == 0:
             checkpoint_path = os.path.join(checkpoints_dir, f"checkpoint_step{len(history['total']):06d}.pt")
-            save_checkpoint(model, checkpoint_path, args, history)
+            save_checkpoint(model, checkpoint_path, args, history, heldout)
 
         total = last_losses["total"].item()
         if is_improvement(total, best_total, args.lbfgs_tol):
@@ -330,12 +422,18 @@ def train(args: argparse.Namespace) -> None:
                 )
                 break
 
-    save_checkpoint(model, final_path, args, history)
+    if heldout is not None and (not heldout["step"] or heldout["step"][-1] != len(history["total"])):
+        record_heldout()
+    save_checkpoint(model, final_path, args, history, heldout)
     print(f"final model: {final_path}")
 
 
 def save_checkpoint(
-    model: torch.nn.Module, path: str, args: argparse.Namespace, history: dict[str, list[float]]
+    model: torch.nn.Module,
+    path: str,
+    args: argparse.Namespace,
+    history: dict[str, list[float]],
+    heldout: dict[str, list[float]] | None = None,
 ) -> None:
     """Save model weights plus the metadata needed to reload them.
 
@@ -346,8 +444,16 @@ def save_checkpoint(
     bounds on its own instead of having them re-supplied by hand -- and the
     loss curve survives past the training process instead of being discarded
     when it exits.
+
+    `heldout` (with --heldout-every) is saved under its own key rather than
+    in `history`: it is logged every K steps, not every step, so it can't
+    share history's one-value-per-step lists. Keys are "step" (index into
+    history), "pde_u" and "pde_mu" (unweighted).
     """
-    torch.save({"model_state": model.state_dict(), "args": vars(args), "history": history}, path)
+    checkpoint = {"model_state": model.state_dict(), "args": vars(args), "history": history}
+    if heldout is not None:
+        checkpoint["heldout"] = heldout
+    torch.save(checkpoint, path)
 
 
 if __name__ == "__main__":

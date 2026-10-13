@@ -31,3 +31,23 @@ def test_worse_or_equal_is_not_an_improvement():
 def test_nan_is_not_an_improvement():
     # A diverged run must count as stalled, not as endless improvement.
     assert not is_improvement(math.nan, 1.0, tol=1e-6)
+
+
+def test_parse_args_rejects_resampling_a_grid(monkeypatch):
+    import pytest
+
+    from src.pinn.train import parse_args
+
+    monkeypatch.setattr("sys.argv", ["train", "--collocation", "grid", "--resample-every", "10"])
+    with pytest.raises(SystemExit):
+        parse_args()
+
+
+def test_parse_args_rejects_grid_shape_without_grid(monkeypatch):
+    import pytest
+
+    from src.pinn.train import parse_args
+
+    monkeypatch.setattr("sys.argv", ["train", "--collocation", "sobol", "--grid-shape", "4", "4", "4"])
+    with pytest.raises(SystemExit):
+        parse_args()

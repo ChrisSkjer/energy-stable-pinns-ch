@@ -120,7 +120,7 @@ to get everything in one folder.
 | --- | --- |
 | `--evaluation <npz>` | nothing on its own; input for `--fem-fields` and `--field-plots` |
 | `--field-plots` | `field_u_<idx>_t<val>.pdf`, `field_mu_<idx>_t<val>.pdf` (one each per saved time) — requires `--evaluation` |
-| `--checkpoint <pt>` | `loss_history.pdf` + `run_summary.txt` |
+| `--checkpoint <pt>` | `loss_history.pdf` + `run_summary.txt`, and `heldout_residual.pdf` if trained with `--heldout-every` |
 | `--diagnostics <csv>` | `energy_dissipation.pdf`, `mass_conservation.pdf` |
 | `--fem-diagnostics <csv>` | FEM reference overlaid on those same two plots |
 | `--fem-fields <npz>` | `comparison_<idx>_t<val>.pdf` + `comparison_mu_<idx>_t<val>.pdf` (relative L2 error in the diff panel's title), and `relative_l2_error.pdf` — requires `--evaluation` |
@@ -223,6 +223,23 @@ Use the same `--ic` as the PINN run (its value is in the run summary). For
 `--ic noise`, the FEM `--seed` must also equal the PINN `--ic-seed`. Both
 default to 42.
 
+## 4. Comparing runs on fresh points
+
+The training loss is measured on the run's own collocation points, so it
+can't show overfitting. `scripts/compare_residuals.py` evaluates every run on
+the *same* fresh points (fixed `--seed`) — the fair comparison between
+sampling strategies (`--collocation`, `--resample-every`):
+
+```powershell
+.venv\Scripts\python.exe scripts\compare_residuals.py "*ic-cross" --csv results/residuals_cross.csv
+```
+
+Run names or glob patterns under `results/pinn_models/`. Per run it prints
+unweighted `pde_u`/`pde_mu`/`ic` on training vs. fresh points with the
+fresh/train ratio (≫ 1 = overfitting the collocation points), and fresh
+`pde_u` per t-window, log-spaced towards t=0 where the residual tends to
+hide. Works on checkpoints from before the sampling flags existed.
+
 ## Output map
 
 After a full pass:
@@ -237,6 +254,7 @@ results/pinn_models/<run-name>/
     ├── field_u_000_t0.pdf ...                                # only with --field-plots
     ├── field_mu_000_t0.pdf ...                               # only with --field-plots
     ├── loss_history.pdf
+    ├── heldout_residual.pdf                                   # only if trained with --heldout-every
     ├── run_summary.txt
     ├── energy_dissipation.pdf
     ├── mass_conservation.pdf

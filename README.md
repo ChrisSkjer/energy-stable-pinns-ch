@@ -34,6 +34,7 @@ FEniCSx (DOLFINx).
 │                   # holds each training run's checkpoints + evaluation + plots
 │                   # (all gitignored)
 ├── scripts/        # analyze_run.py (evaluate + diagnostics + plots in one go),
+│                   # compare_residuals.py (runs vs. fresh-point PDE residuals),
 │                   # pull_colab_model.py (decode a model pulled from Colab)
 ├── docs/           # colab_workflow.md, post_training_cheatsheet.md
 ├── tests/          # unit tests
@@ -215,7 +216,8 @@ Figures render inline; save any you want to keep under `results/`.
 
 This is the real thesis training code — `src/pinn/model.py` (network),
 `src/pinn/losses.py` (PDE/IC/BC/energy loss terms), and
-`src/pinn/sampling.py` (domain point sampling) — as opposed to the
+`src/pinn/sampling.py` (IC/BC points), `src/pinn/collocation.py`
+(collocation point strategies) — as opposed to the
 self-contained demo notebook above. **Requirements:** the venv from Local
 setup above — only `torch` is actually exercised by this script.
 
@@ -255,6 +257,33 @@ condition (`--ic cross|two_circles|noise`, default `cross`; `--ic-seed` for
 `noise`, which must match the FEM `--seed`), loss weights
 (`--pde-u-weight`/`--pde-mu-weight`/`--ic-weight`/`--bc-weight`), and optimizer settings
 (`--lr`, `--lbfgs-steps`, plus the early-stopping flags below).
+
+**Collocation sampling strategies.** Where the PDE residual is enforced is
+selectable, so sampling experiments differ by one flag
+(`src/pinn/collocation.py`):
+
+| `--collocation` | Points |
+| --- | --- |
+| `random` (default) | Independent uniform draws — the original behaviour |
+| `sobol` | Scrambled Sobol quasi-random points: random-looking, but spread more evenly (lower discrepancy) |
+| `grid` | Cell-centred regular (x, y, t) grid; `--grid-shape NX NY NT`, default `round(n^(1/3))` per axis (20000 → 27³ = 19683) |
+
+`--resample-every K` redraws the `random`/`sobol` points every `K` Adam
+epochs (Sobol continues its sequence rather than restarting). L-BFGS always
+keeps the last set fixed, since its line search needs a deterministic loss.
+`--sampling-seed` (default `0`) makes the draw reproducible. The
+`--pde-at-t0` points are kept across resamples.
+
+The training loss only sees the training points, so it can't show a
+network overfitting them. `--heldout-every K` logs the unweighted PDE
+residuals on a fixed set of `--heldout-n` fresh points every `K` Adam epochs
+and L-BFGS steps; `plot_results --checkpoint` then writes
+`heldout_residual.pdf`. To compare finished runs on the same fresh points,
+including runs trained before these flags existed:
+
+```powershell
+.venv\Scripts\python.exe scripts\compare_residuals.py "*ic-cross" --csv results/residuals_cross.csv
+```
 
 **A note on `--lbfgs-steps`.** It counts *outer* `LBFGS.step(closure)`
 calls, each of which runs up to 20 inner iterations — so the recorded
@@ -434,6 +463,8 @@ stdout):
   left the FEM field with the line dashed in, right PINN and FEM u along that
   line. The line is `x = --profile-x` (default `0.25`), or `y = --profile-y`
   if given; both snap to the nearest grid line.
+- `heldout_residual.pdf` — held-out vs. training-point PDE residuals over
+  training (only if `--checkpoint` was trained with `--heldout-every`).
 - `relative_l2_error.pdf` — relative L2 error ‖PINN − FEM‖₂ / ‖FEM‖₂ of u
   and mu against t, on a log axis, one point per evaluation time (only with
   `--fem-fields`); the same number is in each comparison's diff-panel title.

@@ -20,22 +20,36 @@ class TrainingPoints:
     """Point tensors sampled from the domain for one training run.
 
     Attributes:
-        collocation: (N, 3) interior (x, y, t) points, requires_grad=True.
+        collocation: (N + pde_at_t0, 3) PDE residual points -- the interior
+            points followed by t0_points -- requires_grad=True.
         ic_points: (N_ic, 3) points at t = t_lo.
         ic_values: (N_ic, 1) target u values at ic_points.
         bc_points: (N_bc, 3) points on the four spatial edges, requires_grad=True.
+        t0_points: (pde_at_t0, 3) the IC points also used as PDE points, kept
+            so a resample of the interior points can re-append the same ones.
     """
 
     collocation: torch.Tensor
     ic_points: torch.Tensor
     ic_values: torch.Tensor
     bc_points: torch.Tensor
+    t0_points: torch.Tensor
+
+
+def with_pde_at_t0(collocation: torch.Tensor, t0_points: torch.Tensor) -> torch.Tensor:
+    """Append the fixed t=0 PDE points (see sample_points' pde_at_t0) to a
+    set of interior collocation points, as one requires_grad leaf tensor.
+
+    Kept separate so train.py can resample the interior points without
+    redrawing the t=0 ones.
+    """
+    return torch.cat([collocation.detach(), t0_points], dim=0).requires_grad_(True)
 
 
 def sample_points(
     lower: tuple[float, float, float],
     upper: tuple[float, float, float],
-    n_collocation: int,
+    collocation: torch.Tensor,
     n_ic: int,
     n_bc: int,
     device: torch.device | str = "cpu",
@@ -44,12 +58,13 @@ def sample_points(
     ic: str = "cross",
     ic_seed: int = 0,
 ) -> TrainingPoints:
-    """Sample collocation, initial-condition, and boundary-condition points.
+    """Bundle collocation points with sampled initial- and boundary-condition points.
 
     Args:
         lower: (x_lo, y_lo, t_lo) domain lower bound.
         upper: (x_hi, y_hi, t_hi) domain upper bound.
-        n_collocation: number of random interior points.
+        collocation: (N, 3) interior PDE points, from a sampler in
+            src/pinn/collocation.py (the choice of strategy lives there).
         n_ic: side length of the (n_ic x n_ic) grid of initial-condition points.
         n_bc: side length of the grid of boundary points per edge.
         device: device to place the tensors on.
@@ -65,11 +80,6 @@ def sample_points(
     Returns:
         A TrainingPoints bundle.
     """
-    x = torch.rand(n_collocation, 1, device=device) * (upper[0] - lower[0]) + lower[0]
-    y = torch.rand(n_collocation, 1, device=device) * (upper[1] - lower[1]) + lower[1]
-    t = torch.rand(n_collocation, 1, device=device) * (upper[2] - lower[2]) + lower[2]
-    x_pde = torch.cat([x, y, t], dim=1)
-
     grid_x, grid_y = torch.meshgrid(
         torch.linspace(lower[0], upper[0], n_ic, device=device),
         torch.linspace(lower[1], upper[1], n_ic, device=device),
@@ -78,11 +88,9 @@ def sample_points(
     x_ic = torch.stack([grid_x.reshape(-1), grid_y.reshape(-1)], dim=1)
     x_ic = torch.cat([x_ic, torch.full((x_ic.shape[0], 1), lower[2], device=device)], dim=1)
 
-    if pde_at_t0:
-        idx = torch.randperm(x_ic.shape[0], device=device)[:pde_at_t0]
-        x_pde = torch.cat([x_pde, x_ic[idx]], dim=0)
-
-    x_pde = x_pde.requires_grad_(True)
+    idx = torch.randperm(x_ic.shape[0], device=device)[:pde_at_t0]
+    t0_points = x_ic[idx]
+    x_pde = with_pde_at_t0(collocation.to(device), t0_points)
     # IC targets need no grad, so evaluating them in numpy is fine.
     x_ic_np = x_ic.cpu().numpy()
     ic_values = torch.as_tensor(
@@ -111,4 +119,6 @@ def sample_points(
         dim=0,
     ).requires_grad_(True)
 
-    return TrainingPoints(collocation=x_pde, ic_points=x_ic, ic_values=ic_values, bc_points=x_bc)
+    return TrainingPoints(
+        collocation=x_pde, ic_points=x_ic, ic_values=ic_values, bc_points=x_bc, t0_points=t0_points
+    )

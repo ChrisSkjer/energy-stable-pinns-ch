@@ -48,6 +48,7 @@ from src.common.plotting import (
     plot_comparison,
     plot_energy_dissipation,
     plot_field,
+    plot_heldout_residual,
     plot_line_profile,
     plot_loss_history,
     plot_mass_conservation,
@@ -79,7 +80,8 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Path to a .pt checkpoint written by src/pinn/train.py. "
-        "Produces a training-loss-vs-step plot from its bundled history.",
+        "Produces a training-loss-vs-step plot from its bundled history, and "
+        "heldout_residual.* when it was trained with --heldout-every.",
     )
     parser.add_argument(
         "--diagnostics",
@@ -341,6 +343,28 @@ def plot_training_history(
     return path
 
 
+def plot_heldout(checkpoint_path: str, output_dir: str, dpi: int = 150, fmt: str = "pdf") -> str | None:
+    """Save heldout_residual.<fmt> from a checkpoint trained with
+    --heldout-every (plotting.plot_heldout_residual).
+
+    Returns the saved path, or None when the checkpoint has no held-out log.
+    """
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    if "heldout" not in checkpoint:
+        return None
+    args = checkpoint["args"]
+    ax = plot_heldout_residual(
+        checkpoint["heldout"],
+        checkpoint["history"],
+        pde_u_weight=args.get("pde_u_weight", 1.0),
+        pde_mu_weight=args.get("pde_mu_weight", 1.0),
+    )
+    path = os.path.join(output_dir, f"heldout_residual.{fmt}")
+    ax.figure.savefig(path, dpi=dpi, bbox_inches="tight")
+    plt.close(ax.figure)
+    return path
+
+
 def write_run_summary(checkpoint_path: str, output_dir: str) -> str:
     """Write <output_dir>/run_summary.txt from a train.py checkpoint --
     network size, domain, sampling, optimizer, loss weights, parameter
@@ -427,6 +451,11 @@ if __name__ == "__main__":
             )
         )
         saved_paths.append(write_run_summary(cli_args.checkpoint, cli_args.output_dir))
+        heldout_path = plot_heldout(
+            cli_args.checkpoint, cli_args.output_dir, dpi=cli_args.dpi, fmt=cli_args.format
+        )
+        if heldout_path is not None:
+            saved_paths.append(heldout_path)
     if cli_args.diagnostics is not None or cli_args.fem_diagnostics is not None:
         saved_paths += plot_diagnostics(
             cli_args.diagnostics,

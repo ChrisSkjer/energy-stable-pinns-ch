@@ -207,6 +207,48 @@ def plot_line_profile(
     return fig, (ax_field, ax_profile)
 
 
+def plot_heldout_residual(
+    heldout: dict[str, list[float]],
+    history: dict[str, list[float]],
+    pde_u_weight: float = 1.0,
+    pde_mu_weight: float = 1.0,
+    ax=None,
+):
+    """Unweighted PDE residuals on held-out points vs. on the training
+    collocation points, against optimizer step (log scale).
+
+    A widening gap between the solid (held-out) and faded (training) curve
+    of the same colour is the network overfitting its collocation points.
+
+    Args:
+        heldout: the "heldout" entry of a train.py checkpoint saved with
+            --heldout-every: "step" (index into history), "pde_u", "pde_mu"
+            (unweighted).
+        history: the same checkpoint's "history"; its pde_u/pde_mu are
+            weighted, so they are divided by the weights below.
+        pde_u_weight, pde_mu_weight: the run's --pde-u-weight/--pde-mu-weight.
+        ax: existing matplotlib axes to draw on, or None to create a new figure.
+
+    Returns:
+        The axes the curves were drawn on.
+    """
+    if ax is None:
+        _, ax = plt.subplots()
+
+    for name, weight, color in (("pde_u", pde_u_weight, "C0"), ("pde_mu", pde_mu_weight, "C1")):
+        if name in history:
+            train = np.asarray(history[name]) / weight
+            ax.semilogy(train, lw=1, alpha=0.4, color=color, label=f"{name} (training points)")
+        ax.semilogy(heldout["step"], heldout[name], lw=2, marker=".", color=color, label=f"{name} (held-out)")
+
+    ax.set_xlabel("optimizer step")
+    ax.set_ylabel("unweighted residual (MSE)")
+    ax.set_title("PDE residual: training vs. held-out points")
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend()
+    return ax
+
+
 def plot_relative_l2_error(
     t: np.ndarray,
     errors: dict[str, np.ndarray],
