@@ -134,7 +134,7 @@ Run it from the repo root with `-m`. The solver imports the shared initial
 conditions from `src/common/`, so `python src/fem/cahn_hilliard.py` fails on
 imports.
 
-Every field on `CahnHilliardConfig` (`src/fem/cahn_hilliard.py`) is exposed
+Every field on `CahnHilliardConfig` (`src/fem/config.py`) is exposed
 as a matching CLI flag automatically (`nx` → `--nx`, `epsilon` → `--epsilon`,
 `visualize` → `--visualize`/`--no-visualize`, etc.) — run `--help` to see the
 full list. `--ic {cross,two_circles,noise}` picks the initial condition

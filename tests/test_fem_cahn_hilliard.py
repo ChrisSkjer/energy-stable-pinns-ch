@@ -60,7 +60,8 @@ def _render_frame(tmp_path, field):
     import matplotlib.image as mpimg
     from dolfinx.fem import Function
 
-    from src.fem.cahn_hilliard import CahnHilliardConfig, _FrameWriter, build_function_space, build_mesh
+    from src.fem.cahn_hilliard import CahnHilliardConfig, build_function_space, build_mesh
+    from src.fem.output import _FrameWriter
 
     ME = build_function_space(build_mesh(CahnHilliardConfig(nx=20, ny=20)))
     V0, dofs0 = ME.sub(0).collapse()

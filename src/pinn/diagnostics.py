@@ -12,7 +12,7 @@ cheap re-plot to pay a ~20s autograd pass or force diagnostics onto too
 coarse a grid.
 
 Writes diagnostics.csv with exactly the same three columns as
-src/fem/cahn_hilliard.py's _DiagnosticsLogger (t, free_energy, total_mass),
+src/fem/output.py's _DiagnosticsLogger (t, free_energy, total_mass),
 so src/common/plotting.py::load_diagnostics reads both a FEM and a PINN run
 with the same code.
 """
@@ -155,7 +155,7 @@ def diagnostics_over_time(
 
 def save_diagnostics(path: str, t: np.ndarray, energy: np.ndarray, mass: np.ndarray) -> None:
     """Write t,free_energy,total_mass -- byte-format-identical to
-    src/fem/cahn_hilliard.py's _DiagnosticsLogger, so the two are
+    src/fem/output.py's _DiagnosticsLogger, so the two are
     interchangeable to src/common/plotting.py::load_diagnostics.
 
     Exactly three columns, always -- adding a fourth breaks load_diagnostics'

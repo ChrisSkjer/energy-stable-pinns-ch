@@ -5,6 +5,10 @@ official DOLFINx Cahn-Hilliard demo: the phase field c and chemical
 potential mu are solved as a coupled mixed (c, mu) system with a
 Crank-Nicolson-type time-stepping scheme and Newton nonlinear solves.
 
+This file holds only the math. Run parameters, sanity checks, the CLI and
+the PETSc options are in src/fem/config.py. Logging, frames and the
+fem_fields.npz dump are in src/fem/output.py.
+
 NOTE: legacy FEniCS (`dolfin`) demos are NOT API-compatible with DOLFINx
 (`dolfinx`) — only DOLFINx-specific references apply here.
 
@@ -13,305 +17,20 @@ Run in the `fenicsx-env` conda environment (see environment.yml).
 
 from __future__ import annotations
 
-import argparse
-import dataclasses
-import warnings
-from dataclasses import dataclass
 from pathlib import Path
-from typing import TextIO, get_type_hints
 
-import numpy as np
 import ufl
 from basix.ufl import element, mixed_element
 from mpi4py import MPI
-from petsc4py import PETSc
 
-from dolfinx import default_real_type, plot
+from dolfinx import default_real_type
 from dolfinx.fem import Constant, Function, assemble_scalar, form, functionspace
 from dolfinx.fem.petsc import NonlinearProblem
 from dolfinx.mesh import CellType, create_unit_square
 
-from src.common.initial_conditions import INITIAL_CONDITIONS, initial_condition
-
-try:
-    import pyvista as pv
-
-    pv.OFF_SCREEN = True
-    _HAVE_PYVISTA = True
-except ModuleNotFoundError:
-    _HAVE_PYVISTA = False
-
-
-@dataclass
-class CahnHilliardConfig:
-    """Parameters for a Cahn-Hilliard FEM run.
-
-    NOTE: nx/ny, epsilon, dt and t_final are physically coupled and cannot be
-    chosen independently. Three constraints tie them together:
-
-    1. The mesh must resolve the interface: h <~ epsilon/4, i.e. nx >~ 4/epsilon.
-    2. Spinodal decomposition runs on the timescale set by the bulk well. For
-       f = 1/4 (1 - c^2)^2 linear stability gives a fastest growth rate
-       sigma_max = mobility/(4*epsilon^2), so the timescale is
-       tau = 4*epsilon^2/mobility. Take dt ~ tau/50 and t_final ~ 50*tau --
-       phase separation completes in roughly 30-60 tau.
-    3. epsilon must be well below the domain size or the phases never form.
-       The fastest-growing wavelength is ~8.9*epsilon, so on the unit square
-       epsilon=0.1 gives a single blob that stalls at c ~ +-0.87 and never
-       reaches the pure phases; epsilon <= 0.05 separates properly.
-
-    Beware of copying dt/t_final from the DOLFINx Cahn-Hilliard demo: it uses
-    f = 100*c^2*(1-c)^2 on c in [0, 1], a well ~100x stiffer than the one here,
-    so its dt=5e-6 / t_final=2.5e-4 are ~4 orders of magnitude too short for
-    this f and produce a field that visibly never changes.
-
-    The defaults below are a fast *smoke* configuration (epsilon=0.05, ~2
-    blobs per side, tau=0.01). A resolved thesis run at epsilon=0.02 needs
-    roughly `--nx 200 --ny 200 --dt 3e-5 --t-final 0.4`, which is far slower.
-
-    When `adaptive_dt` is set the solver retries a failed step with a halved
-    dt rather than aborting, so a slightly-too-large dt self-corrects.
-
-    The first `startup_steps` steps are backward Euler (theta=1), the rest use
-    `theta` (a Rannacher start). The IC only sets c, so mu starts at 0, and a
-    Crank-Nicolson first step from there applies half the flux: u then lags
-    the true solution by ~dt/2 and mu stays off for many steps (cross IC,
-    dt=1e-4, t <= 0.01: 0.08-0.4% relative L2 error in u, 0.7-6% in mu).
-    Starting Crank-Nicolson from a consistent mu instead rings on the IC's
-    kinks (the cross's corners). Two implicit steps avoid both, cutting those
-    errors to 0.001-0.08% in u and 0.006-1% in mu; startup_steps=0 is the
-    old scheme.
-    """
-
-    nx: int = 100
-    ny: int = 100
-    epsilon: float = 0.05  # interface-width parameter; needs nx >~ 4/epsilon
-    mobility: float = 1.0
-    dt: float = 1.0e-4  # ~tau/50; initial/maximum step, reduced if adaptive_dt
-    t_final: float = 0.1  # ~50*tau, enough for full separation at epsilon=0.05
-    theta: float = 0.5  # Crank-Nicolson parameter
-    startup_steps: int = 2  # backward-Euler steps before switching to theta, see above
-    log_every: int = 5  # write diagnostics every N time steps
-    ic: str = "cross"  # initial condition, see src/common/initial_conditions.py
-    seed: int = 42  # random seed for the initial condition (used by ic="noise")
-    visualize: bool = True  # save concentration-field PNG frames
-    viz_every: int = 5  # save a frame every N time steps (if visualize)
-    show_gridpoints: bool = False  # overlay mesh vertices on the solution frames
-    adaptive_dt: bool = True  # halve dt and retry when a Newton solve fails
-    dt_min: float = 1.0e-12  # give up if an adaptive step falls below this
-    save_fields: bool = True  # dump (u, mu) on a regular grid, for PINN comparison
-
-
-class _DiagnosticsLogger:
-    """Buffered CSV writer for scalar time-step diagnostics."""
-
-    def __init__(self, output_dir: str, every: int) -> None:
-        if every < 1:
-            raise ValueError("log_every must be at least 1")
-        path = Path(output_dir)
-        path.mkdir(parents=True, exist_ok=True)
-        self.every = every
-        self.file: TextIO = (path / "cahn_hilliard_diagnostics.csv").open(
-            "w", encoding="utf-8", buffering=64 * 1024
-        )
-        self.file.write("t,free_energy,total_mass\n")
-
-    def log(self, step: int, t: float, energy: float, mass: float) -> None:
-        if step % self.every == 0:
-            self.file.write(f"{t:.16e},{energy:.16e},{mass:.16e}\n")
-
-    def close(self) -> None:
-        self.file.close()
-
-
-def _phase_colormap():
-    """Diverging blue<->red colormap for c in [-1, 1], neutral gray at c=0.
-
-    c is a *polarity* field, not a magnitude one: the two phases sit at c=-1
-    and c=+1 either side of a meaningful midpoint at c=0. A sequential map
-    (matplotlib's default viridis) implies a low-to-high ramp and buries that
-    symmetry -- the c=0 mixed state lands mid-ramp instead of reading as
-    "neither phase". A diverging map with a neutral midpoint puts the two
-    phases at opposite poles and lets interfaces show up as the gray band.
-    """
-    try:
-        from matplotlib.colors import LinearSegmentedColormap
-    except ModuleNotFoundError:  # pyvista ships equivalent built-ins
-        return "coolwarm"
-    # blue (c=-1) -> neutral gray (c=0) -> red (c=+1), equal arms
-    return LinearSegmentedColormap.from_list(
-        "phase", ["#2a78d6", "#f0efec", "#e34948"]
-    )
-
-
-class _FrameWriter:
-    """Off-screen PNG snapshots of the concentration field, saved to disk."""
-
-    def __init__(
-        self, output_dir: str, every: int, V0, dofs, show_gridpoints: bool = False
-    ) -> None:
-        if every < 1:
-            raise ValueError("viz_every must be at least 1")
-        if not _HAVE_PYVISTA:
-            raise ModuleNotFoundError(
-                "visualize=True requires pyvista (conda install -n fenicsx-env "
-                "-c conda-forge pyvista)"
-            )
-        self.every = every
-        # some DOLFINx versions wrap the dof array in a single-element list
-        self.dofs = dofs[0] if isinstance(dofs, list) else dofs
-        self.show_gridpoints = show_gridpoints
-        self.frames_dir = Path(output_dir) / "frames"
-        self.frames_dir.mkdir(parents=True, exist_ok=True)
-
-        topology, cell_types, x = plot.vtk_mesh(V0)
-        self.grid = pv.UnstructuredGrid(topology, cell_types, x)
-
-        self.cmap = _phase_colormap()
-        # Vertical bar down the right-hand side. The pyvista default is a wide
-        # horizontal bar with its title centred *above* the ticks, which puts
-        # the title "c" straight on top of the "0.00" label; going vertical
-        # removes the collision and stops the bar crowding the square domain.
-        self.scalar_bar_args = dict(
-            title="c",
-            vertical=True,
-            position_x=0.86,
-            position_y=0.22,
-            width=0.05,
-            height=0.56,
-            n_labels=5,
-            fmt="%.1f",  # -1.0/-0.5/0.0/0.5/1.0, not the default -1.00/-0.500
-            title_font_size=18,
-            label_font_size=15,
-            color="black",
-        )
-
-    def save(self, step: int, t: float, u_array) -> None:
-        if step % self.every != 0:
-            return
-        self.grid.point_data["c"] = u_array[self.dofs].real
-        self.grid.set_active_scalars("c")
-        plotter = pv.Plotter(off_screen=True, window_size=(900, 800))
-        plotter.set_background("white")
-        plotter.add_mesh(
-            self.grid,
-            cmap=self.cmap,
-            clim=[-1, 1],
-            scalar_bar_args=self.scalar_bar_args,
-            # Lighting shades a flat 2D mesh ~25% darker than the colour bar,
-            # so c could no longer be read off the bar.
-            lighting=False,
-        )
-        if self.show_gridpoints:
-            plotter.add_points(
-                self.grid.points,
-                color="black",
-                point_size=3,
-                render_points_as_spheres=True,
-            )
-        # Camera on +z: x to the right, y up. view_xy(negative=True) looks from
-        # -z and mirrors x, which put the large two_circles disk on the right.
-        plotter.view_xy()
-        plotter.add_text(
-            f"time: {t:.2e}", font_size=12, color="black", name="timelabel"
-        )
-        plotter.screenshot(str(self.frames_dir / f"frame_{step:06d}.png"))
-        plotter.close()
-
-
-def _interpolate_to_grid(coords: np.ndarray, values: np.ndarray, X: np.ndarray, Y: np.ndarray) -> np.ndarray:
-    """Scatter DOF values onto a regular grid via linear interpolation (exact
-    at grid points that coincide with a DOF, as _FieldRecorder's all do).
-
-    Falls back to nearest-neighbor for any grid point griddata leaves as NaN
-    -- happens occasionally right at the domain boundary, where a target
-    point sits exactly on (rather than safely inside) the DOF convex hull.
-    """
-    from scipy.interpolate import griddata
-
-    grid = griddata(coords, values, (X, Y), method="linear")
-    nan_mask = np.isnan(grid)
-    if nan_mask.any():
-        grid[nan_mask] = griddata(coords, values, (X[nan_mask], Y[nan_mask]), method="nearest")
-    return grid
-
-
-class _FieldRecorder:
-    """Collects (t, u, mu) snapshots on a regular grid, for saving to an .npz
-    that PINN vs. FEM comparisons can load directly.
-
-    Uses the same (x, y, t, u, mu) layout as src/pinn/evaluate.py's
-    save_evaluation, so src/common/plotting.py::plot_comparison can consume
-    either one -- x, y are (nx+1, ny+1) meshgrids (np.meshgrid(...,
-    indexing="ij")) and u, mu are (len(t), nx+1, ny+1).
-
-    nx+1 points per side, because create_unit_square(nx, ny) has nx cells and
-    so nx+1 vertices per side: the grid then sits exactly on the P1 dofs and
-    the values saved are the nodal values themselves. (An nx-point grid falls
-    between the vertices and adds an interpolation error -- 0.37% relative L2
-    for the cross IC at eps=0.05 -- to every PINN-vs-FEM comparison.) The
-    dofs are not in raster order, so each snapshot is still scattered onto
-    the grid with scipy.interpolate.griddata rather than reshaped directly.
-    """
-
-    def __init__(self, every: int, V0, dofs0, V1, dofs1, nx: int, ny: int) -> None:
-        if every < 1:
-            raise ValueError("viz_every must be at least 1")
-        self.every = every
-        self.dofs0 = dofs0[0] if isinstance(dofs0, list) else dofs0
-        self.dofs1 = dofs1[0] if isinstance(dofs1, list) else dofs1
-        self.coords0 = V0.tabulate_dof_coordinates()[:, :2]
-        self.coords1 = V1.tabulate_dof_coordinates()[:, :2]
-        x = np.linspace(0.0, 1.0, nx + 1)
-        y = np.linspace(0.0, 1.0, ny + 1)
-        self.X, self.Y = np.meshgrid(x, y, indexing="ij")
-        self.times: list[float] = []
-        self.u_frames: list[np.ndarray] = []
-        self.mu_frames: list[np.ndarray] = []
-
-    def save(self, step: int, t: float, u_array: np.ndarray) -> None:
-        if step % self.every != 0:
-            return
-        u_vals = u_array[self.dofs0].real
-        mu_vals = u_array[self.dofs1].real
-        self.times.append(t)
-        self.u_frames.append(_interpolate_to_grid(self.coords0, u_vals, self.X, self.Y))
-        self.mu_frames.append(_interpolate_to_grid(self.coords1, mu_vals, self.X, self.Y))
-
-    def write(self, output_dir: str) -> Path:
-        path = Path(output_dir) / "fem_fields.npz"
-        np.savez(
-            path,
-            x=self.X,
-            y=self.Y,
-            t=np.array(self.times),
-            u=np.stack(self.u_frames, axis=0),
-            mu=np.stack(self.mu_frames, axis=0),
-        )
-        return path
-
-
-def parse_args() -> argparse.Namespace:
-    """CLI flags mirrored 1:1 from CahnHilliardConfig fields, so they can't drift."""
-    parser = argparse.ArgumentParser(description="Run the Cahn-Hilliard FEM solver")
-    hints = get_type_hints(CahnHilliardConfig)
-    for f in dataclasses.fields(CahnHilliardConfig):
-        flag = f"--{f.name.replace('_', '-')}"
-        if hints[f.name] is bool:
-            # BooleanOptionalAction so True-by-default flags stay switchable
-            # off (--visualize / --no-visualize)
-            parser.add_argument(
-                flag, action=argparse.BooleanOptionalAction, default=f.default
-            )
-        else:
-            parser.add_argument(flag, type=hints[f.name], default=f.default)
-    parser.add_argument("--output-dir", type=str, default="data")
-    parser.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Allow overwriting an output-dir that already has results in it.",
-    )
-    return parser.parse_args()
+from src.common.initial_conditions import initial_condition
+from src.fem.config import CahnHilliardConfig, check_config, config_from_args, newton_options, parse_args
+from src.fem.output import RunOutputs, check_output_dir
 
 
 def build_mesh(config: CahnHilliardConfig):
@@ -330,76 +49,20 @@ def solve(
 ) -> Path:
     """Run the Cahn-Hilliard time-stepping loop.
 
-    Logs free energy E(t) and total mass over time to `output_dir` (stays
-    local — this data never needs to leave this machine). Also writes, at
-    `config.viz_every` cadence:
-      - `frames/frame_*.png`, if `config.visualize` (rendered snapshots).
-      - `fem_fields.npz` (x, y, t, u, mu), if `config.save_fields` -- raw
-        nodal values on the (nx+1, ny+1) grid of mesh vertices, in the same
-        layout as a PINN evaluation.npz (see
-        src/pinn/evaluate.py::save_evaluation), for direct comparison via
-        src/common/plotting.py::plot_comparison.
+    Writes the diagnostics CSV (t, free_energy, total_mass), PNG frames and
+    fem_fields.npz to `output_dir`; see src/fem/output.py.
 
     Args:
         config: solver configuration (mesh resolution, epsilon, mobility, dt, t_final).
         output_dir: directory to write time-series logs / solution snapshots to.
         overwrite: if False (default), refuse to run when output_dir already
-            has a diagnostics log in it -- protects a run that took hours
-            from being silently clobbered by a later one that forgot to pass
-            a fresh --output-dir.
+            has a diagnostics log in it.
 
     Returns:
         Path to the diagnostics CSV log (t, free_energy, total_mass).
     """
-    if config.ic not in INITIAL_CONDITIONS:
-        raise ValueError(
-            f"unknown initial condition {config.ic!r}; choose from {sorted(INITIAL_CONDITIONS)}"
-        )
-
-    existing_log = Path(output_dir) / "cahn_hilliard_diagnostics.csv"
-    if existing_log.exists() and not overwrite:
-        raise FileExistsError(
-            f"{existing_log} already has results. Pass a different --output-dir, "
-            f"or --overwrite if you mean to replace it."
-        )
-
-    # interface needs several elements across it (~epsilon/4) or the Newton
-    # solver tends to diverge on the rough random initial condition
-    h = 1.0 / max(config.nx, config.ny)
-    if h > config.epsilon / 4:
-        warnings.warn(
-            f"mesh element size (~{h:.4g}) is coarse relative to epsilon "
-            f"({config.epsilon:.4g}); the interface may be under-resolved. "
-            f"Increase nx/ny to ~{4 / config.epsilon:.0f}+ or use a larger epsilon.",
-            stacklevel=2,
-        )
-
-    # Spinodal timescale for f = 1/4 (1 - c^2)^2: linear stability about c=0
-    # gives growth rate sigma(k) = M k^2 (1 - lam k^2) with lam = epsilon^2,
-    # peaking at sigma_max = M/(4 epsilon^2). Both guards below catch silent
-    # "the field never changes" runs, which are easy to get by borrowing
-    # dt/t_final from the DOLFINx demo (its well is ~100x stiffer than this one).
-    tau = 4 * config.epsilon**2 / config.mobility
-    if config.t_final < 20 * tau:
-        warnings.warn(
-            f"t_final ({config.t_final:.4g}) is short next to the spinodal "
-            f"timescale tau={tau:.4g}; the field will barely move. Phase "
-            f"separation needs roughly 30-60 tau, i.e. t_final >~ {30 * tau:.3g}.",
-            stacklevel=2,
-        )
-
-    # the fastest-growing wavelength is 2*pi*sqrt(2)*epsilon; if that is not
-    # comfortably inside the unit domain the solution stalls as a single smooth
-    # blob at |c| ~ 0.87 instead of separating into the c = -1 / +1 phases
-    fastest_wavelength = 2 * np.pi * np.sqrt(2) * config.epsilon
-    if fastest_wavelength > 0.5:
-        warnings.warn(
-            f"epsilon ({config.epsilon:.4g}) is large for the unit square: the "
-            f"fastest-growing wavelength is ~{fastest_wavelength:.3g}, so the "
-            f"interface spans the domain and c will stall short of +-1 rather "
-            f"than separating. Use epsilon <~ 0.05.",
-            stacklevel=2,
-        )
+    check_config(config)
+    check_output_dir(output_dir, overwrite)
 
     mesh = build_mesh(config)
     ME = build_function_space(mesh)
@@ -448,27 +111,8 @@ def solve(
     )
     F = F0 + F1
 
-    use_superlu = PETSc.IntType == np.int64
-    sys = PETSc.Sys()
-    if sys.hasExternalPackage("mumps") and not use_superlu:
-        linear_solver = "mumps"
-    elif sys.hasExternalPackage("superlu_dist"):
-        linear_solver = "superlu_dist"
-    else:
-        linear_solver = "petsc"
-
-    petsc_options = {
-        "snes_type": "newtonls",
-        "snes_linesearch_type": "bt",
-        "snes_stol": np.sqrt(np.finfo(default_real_type).eps) * 1e-2,
-        "snes_atol": 0,
-        "snes_rtol": 0,
-        "ksp_type": "preonly",
-        "pc_type": "lu",
-        "pc_factor_mat_solver_type": linear_solver,
-    }
     problem = NonlinearProblem(
-        F, u, petsc_options_prefix="ch_solve_", petsc_options=petsc_options
+        F, u, petsc_options_prefix="ch_solve_", petsc_options=newton_options()
     )
 
     # free energy E(t) = interfacial term + bulk double-well term
@@ -484,30 +128,11 @@ def solve(
 
     u0.x.array[:] = u.x.array
 
-    frames = None
-    field_recorder = None
-    if config.visualize or config.save_fields:
-        V0, dofs0 = ME.sub(0).collapse()
-    if config.visualize:
-        frames = _FrameWriter(
-            output_dir, config.viz_every, V0, dofs0, config.show_gridpoints
-        )
-    if config.save_fields:
-        V1, dofs1 = ME.sub(1).collapse()
-        field_recorder = _FieldRecorder(
-            config.viz_every, V0, dofs0, V1, dofs1, config.nx, config.ny
-        )
-
-    diagnostics = _DiagnosticsLogger(output_dir, config.log_every)
+    outputs = RunOutputs(config, output_dir, ME)
     try:
         t = 0.0
         step = 0
-        e, m = energy_and_mass()
-        diagnostics.log(step, t, e, m)
-        if frames is not None:
-            frames.save(step, t, u.x.array)
-        if field_recorder is not None:
-            field_recorder.save(step, t, u.x.array)
+        outputs.record(step, t, u.x.array, *energy_and_mass())
 
         dt_current = config.dt
         successes_at_dt = 0
@@ -516,6 +141,16 @@ def solve(
             # never step past t_final
             dt_current = min(dt_current, config.t_final - t)
             dt_const.value = dt_current
+            # Rannacher start: the first startup_steps steps are backward
+            # Euler, the rest use theta. The IC only sets c, so mu starts at 0,
+            # and a Crank-Nicolson first step from there applies half the
+            # flux: u then lags the true solution by ~dt/2 and mu stays off
+            # for many steps (cross IC, dt=1e-4, t <= 0.01: 0.08-0.4% relative
+            # L2 error in u, 0.7-6% in mu). Starting Crank-Nicolson from a
+            # consistent mu instead rings on the IC's kinks (the cross's
+            # corners). Two implicit steps avoid both, cutting those errors to
+            # 0.001-0.08% in u and 0.006-1% in mu; startup_steps=0 is the old
+            # scheme.
             theta_const.value = 1.0 if step < config.startup_steps else config.theta
 
             # a failed Newton solve leaves u polluted, so always (re)start the
@@ -539,12 +174,7 @@ def solve(
             t += dt_current
             u0.x.array[:] = u.x.array
             step += 1
-            e, m = energy_and_mass()
-            diagnostics.log(step, t, e, m)
-            if frames is not None:
-                frames.save(step, t, u.x.array)
-            if field_recorder is not None:
-                field_recorder.save(step, t, u.x.array)
+            outputs.record(step, t, u.x.array, *energy_and_mass())
 
             # creep back toward the requested dt once the step is settled again
             successes_at_dt += 1
@@ -552,16 +182,11 @@ def solve(
                 dt_current = min(2 * dt_current, config.dt)
                 successes_at_dt = 0
     finally:
-        diagnostics.close()
-        if field_recorder is not None and field_recorder.times:
-            field_recorder.write(output_dir)
+        outputs.close()
 
-    return Path(output_dir) / "cahn_hilliard_diagnostics.csv"
+    return outputs.diagnostics_path
+
 
 if __name__ == "__main__":
     cli_args = parse_args()
-    field_names = {f.name for f in dataclasses.fields(CahnHilliardConfig)}
-    cfg = CahnHilliardConfig(
-        **{k: v for k, v in vars(cli_args).items() if k in field_names}
-    )
-    solve(cfg, output_dir=cli_args.output_dir, overwrite=cli_args.overwrite)
+    solve(config_from_args(cli_args), output_dir=cli_args.output_dir, overwrite=cli_args.overwrite)

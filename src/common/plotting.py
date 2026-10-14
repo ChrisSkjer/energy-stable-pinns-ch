@@ -4,7 +4,7 @@ Framework-agnostic: takes plain numpy arrays only, so this module needs
 neither torch (src/pinn) nor dolfinx/pyvista (src/fem) as a dependency.
 Fields come from src/pinn/evaluate.py (via its .npz output) or from a FEM
 run's saved arrays; scalar diagnostics come from a FEM run's
-cahn_hilliard_diagnostics.csv (see src/fem/cahn_hilliard.py's
+cahn_hilliard_diagnostics.csv (see src/fem/output.py's
 _DiagnosticsLogger) or a PINN run's diagnostics.csv (see
 src/pinn/diagnostics.py) -- both share the same three columns:
 t, free_energy, total_mass.
@@ -26,9 +26,9 @@ STEP_LABEL = "step (Adam epochs, then L-BFGS loss evaluations)"
 def phase_colormap():
     """Diverging blue<->red colormap for c/u in [-1, 1], neutral gray at 0.
 
-    Port of src/fem/cahn_hilliard.py::_phase_colormap, so PINN and FEM plots
+    Port of src/fem/output.py::_phase_colormap, so PINN and FEM plots
     share one visual convention. Kept as a separate copy rather than having
-    cahn_hilliard.py import this one -- that module runs fine without
+    src/fem/output.py import this one -- that module runs fine without
     matplotlib (pyvista resolves its own colormaps), and this copy's fallback
     keeps that true here too.
     """
@@ -112,7 +112,7 @@ def plot_comparison(
     in the difference panel's title so each figure carries its own number.
 
     x, y, c_fem come from a FEM run's fem_fields.npz (see
-    src/fem/cahn_hilliard.py::_FieldRecorder); c_pinn from a PINN run's
+    src/fem/output.py::_FieldRecorder); c_pinn from a PINN run's
     evaluation.npz (see src/pinn/evaluate.py::save_evaluation) evaluated on
     the same x, y grid. src/pinn/plot_results.py wires the two together.
 
@@ -170,7 +170,7 @@ def plot_line_profile(
 
     Args:
         x, y: (nx, ny) meshgrid coordinates (indexing="ij", as written by
-            src/pinn/evaluate.py and src/fem/cahn_hilliard.py's _FieldRecorder).
+            src/pinn/evaluate.py and src/fem/output.py's _FieldRecorder).
         c_pinn, c_fem: (nx, ny) field values on that same grid.
         x_line: x position of a vertical line; snapped to the closest grid column.
         title: optional figure title, e.g. "t=0.005".
@@ -346,7 +346,7 @@ def load_diagnostics(csv_path: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]
 
     Args:
         csv_path: path to a cahn_hilliard_diagnostics.csv written by
-            src/fem/cahn_hilliard.py's _DiagnosticsLogger, or a
+            src/fem/output.py's _DiagnosticsLogger, or a
             diagnostics.csv written by src/pinn/diagnostics.py -- same
             three-column format.
 

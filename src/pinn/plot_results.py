@@ -24,8 +24,8 @@ PINN u/mu field snapshots (field_u_*, field_mu_*) are opt-in: pass
 --field-plots together with --evaluation.
 
 PINN vs. FEM field comparison: pass --evaluation together with --fem-fields
-(a fem_fields.npz written by src/fem/cahn_hilliard.py, see its
-_FieldRecorder) to get plotting.plot_comparison plots, one per PINN
+(a fem_fields.npz written by src/fem/cahn_hilliard.py, see
+src/fem/output.py::_FieldRecorder) to get plotting.plot_comparison plots, one per PINN
 evaluation time, a profile_*.pdf of u along the vertical line
 x = --profile-x, or the horizontal line y = --profile-y if given (PINN
 and FEM on one axis, to see the shape of the transition), plus a relative_l2_error.pdf of the error over time. Requires both to share the same (x, y) grid:
@@ -113,7 +113,7 @@ def parse_args() -> argparse.Namespace:
         "--fem-fields",
         type=str,
         default=None,
-        help="Path to a fem_fields.npz from a FEM run (src/fem/cahn_hilliard.py's "
+        help="Path to a fem_fields.npz from a FEM run (src/fem/output.py's "
         "_FieldRecorder). Requires --evaluation: produces one PINN-vs-FEM "
         "comparison plot per PINN evaluation time, matched to the closest FEM "
         "snapshot time.",
