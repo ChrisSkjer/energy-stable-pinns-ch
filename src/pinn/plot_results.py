@@ -51,6 +51,7 @@ from src.common.plotting import (
     plot_comparison,
     plot_energy_dissipation,
     plot_field,
+    plot_heldout_ic_bc,
     plot_heldout_residual,
     plot_line_profile,
     plot_loss_history,
@@ -393,18 +394,23 @@ def plot_training_history(
     return path
 
 
-def plot_heldout(checkpoint_path: str, output_dir: str, dpi: int = 150, fmt: str = "pdf") -> str | None:
-    """Save heldout_residual.<fmt> from a checkpoint trained with
-    --heldout-every (plotting.plot_heldout_residual).
+def plot_heldout(checkpoint_path: str, output_dir: str, dpi: int = 150, fmt: str = "pdf") -> list[str]:
+    """Save heldout_residual.<fmt> (plotting.plot_heldout_residual) and
+    heldout_ic_bc.<fmt> (plotting.plot_heldout_ic_bc) from a checkpoint
+    trained with --heldout-every.
 
-    Returns the saved path, or None when the checkpoint has no held-out log.
+    Returns the saved paths: none when the checkpoint has no held-out log,
+    and no heldout_ic_bc for runs from before held-out IC/BC points existed.
     """
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
     if "heldout" not in checkpoint:
-        return None
+        return []
     args = checkpoint["args"]
+    heldout = checkpoint["heldout"]
+    saved = []
+
     ax = plot_heldout_residual(
-        checkpoint["heldout"],
+        heldout,
         checkpoint["history"],
         pde_u_weight=args.get("pde_u_weight", 1.0),
         pde_mu_weight=args.get("pde_mu_weight", 1.0),
@@ -412,7 +418,21 @@ def plot_heldout(checkpoint_path: str, output_dir: str, dpi: int = 150, fmt: str
     path = os.path.join(output_dir, f"heldout_residual.{fmt}")
     ax.figure.savefig(path, dpi=dpi, bbox_inches="tight")
     plt.close(ax.figure)
-    return path
+    saved.append(path)
+
+    if "ic" in heldout:
+        ax = plot_heldout_ic_bc(
+            heldout,
+            checkpoint["history"],
+            ic_weight=args.get("ic_weight", 1.0),
+            bc_weight=args.get("bc_weight", 1.0),
+        )
+        path = os.path.join(output_dir, f"heldout_ic_bc.{fmt}")
+        ax.figure.savefig(path, dpi=dpi, bbox_inches="tight")
+        plt.close(ax.figure)
+        saved.append(path)
+
+    return saved
 
 
 def write_run_summary(checkpoint_path: str, output_dir: str) -> str:
@@ -504,11 +524,9 @@ if __name__ == "__main__":
             )
         )
         saved_paths.append(write_run_summary(cli_args.checkpoint, cli_args.output_dir))
-        heldout_path = plot_heldout(
+        saved_paths += plot_heldout(
             cli_args.checkpoint, cli_args.output_dir, dpi=cli_args.dpi, fmt=cli_args.format
         )
-        if heldout_path is not None:
-            saved_paths.append(heldout_path)
     if cli_args.diagnostics is not None or cli_args.fem_diagnostics is not None:
         saved_paths += plot_diagnostics(
             cli_args.diagnostics,

@@ -7,6 +7,7 @@ value all show up as an exact-equality failure on what the plotting
 functions were handed.
 """
 
+import os
 import warnings
 
 import numpy as np
@@ -220,3 +221,23 @@ def test_training_history_marks_where_lbfgs_takes_over(tmp_path, recorders, extr
     (call_args, kwargs), = recorders["plot_loss_history"].calls
     assert call_args[0] == history
     assert kwargs["adam_steps"] == boundary
+
+
+@pytest.mark.parametrize(
+    ("heldout", "expected"),
+    [
+        (
+            {"step": [1, 2], "pde_u": [1.0, 0.5], "pde_mu": [1.0, 0.5], "ic": [0.3, 0.2], "bc": [0.1, 0.1]},
+            ["heldout_residual.png", "heldout_ic_bc.png"],
+        ),
+        ({"step": [1, 2], "pde_u": [1.0, 0.5], "pde_mu": [1.0, 0.5]}, ["heldout_residual.png"]),  # older run
+        (None, []),  # trained without --heldout-every
+    ],
+)
+def test_plot_heldout_saves_ic_bc_plot_only_when_logged(tmp_path, heldout, expected):
+    history = {"pde_u": [1.0, 0.5], "pde_mu": [1.0, 0.5], "ic": [1.0, 0.5], "bc": [1.0, 0.5], "total": [4.0, 2.0]}
+    extra = None if heldout is None else {"heldout": heldout}
+    path = _checkpoint(tmp_path / "final.pt", history, extra)
+    saved = plot_results.plot_heldout(path, str(tmp_path), dpi=20, fmt="png")
+    assert [os.path.basename(p) for p in saved] == expected
+    assert all(os.path.exists(p) for p in saved)

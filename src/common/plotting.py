@@ -262,6 +262,49 @@ def plot_heldout_residual(
     return ax
 
 
+def plot_heldout_ic_bc(
+    heldout: dict[str, list[float]],
+    history: dict[str, list[float]],
+    ic_weight: float = 1.0,
+    bc_weight: float = 1.0,
+    ax=None,
+):
+    """Unweighted IC and BC losses on held-out points vs. on the training
+    IC/BC grids, against optimizer step (log scale).
+
+    The companion of plot_heldout_residual: the training IC/BC points are
+    regular grids, so a widening gap between the solid (held-out) and faded
+    (training) curve means the network fits the condition only at the grid
+    nodes.
+
+    Args:
+        heldout: the "heldout" entry of a train.py checkpoint saved with
+            --heldout-every, with "step", "ic" and "bc" (unweighted).
+        history: the same checkpoint's "history"; its ic/bc are weighted, so
+            they are divided by the weights below.
+        ic_weight, bc_weight: the run's --ic-weight/--bc-weight.
+        ax: existing matplotlib axes to draw on, or None to create a new figure.
+
+    Returns:
+        The axes the curves were drawn on.
+    """
+    if ax is None:
+        _, ax = plt.subplots()
+
+    for name, weight, color in (("ic", ic_weight, "C2"), ("bc", bc_weight, "C3")):
+        if name in history:
+            train = np.asarray(history[name]) / weight
+            ax.semilogy(train, lw=1, alpha=0.4, color=color, label=f"{name} (training points)")
+        ax.semilogy(heldout["step"], heldout[name], lw=2, marker=".", color=color, label=f"{name} (held-out)")
+
+    ax.set_xlabel(STEP_LABEL)
+    ax.set_ylabel("unweighted loss (MSE)")
+    ax.set_title("IC/BC loss: training vs. held-out points")
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend()
+    return ax
+
+
 def plot_relative_l2_error(
     t: np.ndarray,
     errors: dict[str, np.ndarray],

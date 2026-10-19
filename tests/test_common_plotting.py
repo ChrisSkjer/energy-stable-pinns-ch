@@ -191,6 +191,19 @@ def test_plot_heldout_residual_unweights_training_curves():
     np.testing.assert_array_equal(lines["pde_mu (held-out)"].get_ydata(), [0.5, 0.4])
 
 
+
+def test_plot_heldout_ic_bc_unweights_training_curves():
+    history = {"ic": [10.0, 5.0], "bc": [0.2, 0.1], "total": [10.2, 5.1]}
+    heldout = {"step": [1, 2], "ic": [3.0, 2.0], "bc": [0.5, 0.4]}
+    ax = plotting.plot_heldout_ic_bc(heldout, history, ic_weight=10.0, bc_weight=0.1)
+
+    lines = _lines(ax)
+    assert len(lines) == 4
+    np.testing.assert_allclose(lines["ic (training points)"].get_ydata(), [1.0, 0.5])
+    np.testing.assert_allclose(lines["bc (training points)"].get_ydata(), [2.0, 1.0])
+    np.testing.assert_array_equal(lines["ic (held-out)"].get_xdata(), [1, 2])
+    np.testing.assert_array_equal(lines["bc (held-out)"].get_ydata(), [0.5, 0.4])
+
 def test_energy_plot_shows_each_series_under_its_own_label():
     t_p, e_p = np.linspace(0.0, 0.01, 5), np.array([0.11, 0.10, 0.09, 0.085, 0.08])
     t_f, e_f = np.linspace(0.0, 0.01, 3), np.array([0.12, 0.10, 0.07])

@@ -46,6 +46,73 @@ def with_pde_at_t0(collocation: torch.Tensor, t0_points: torch.Tensor) -> torch.
     return torch.cat([collocation.detach(), t0_points], dim=0).requires_grad_(True)
 
 
+def ic_targets(points: torch.Tensor, ic: str, epsilon: float, ic_seed: int = 0) -> torch.Tensor:
+    """(N, 1) initial-condition u values at the (x, y) columns of `points`,
+    on the same device and dtype.
+
+    IC targets need no grad, so evaluating them in numpy is fine.
+    """
+    points_np = points.detach().cpu().numpy()
+    return torch.as_tensor(
+        initial_condition(ic, points_np[:, 0], points_np[:, 1], epsilon=epsilon, seed=ic_seed),
+        dtype=points.dtype,
+        device=points.device,
+    ).unsqueeze(1)
+
+
+def heldout_ic_bc_points(
+    lower: tuple[float, float, float],
+    upper: tuple[float, float, float],
+    n_ic: int,
+    n_bc_per_edge: int,
+    seed: int,
+    epsilon: float = DEFAULT_EPSILON,
+    ic: str = "cross",
+    ic_seed: int = 0,
+    device: torch.device | str = "cpu",
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Fixed uniform random IC and BC points for held-out ic_loss/bc_loss.
+
+    The training IC/BC points are regular grids, so these probe the error
+    between grid nodes (an unbiased estimate of the continuous error) and,
+    drawn from their own generators, never coincide with a training point.
+
+    Args:
+        lower, upper: (x, y, t) domain bounds.
+        n_ic: number of points on the t = t_lo plane.
+        n_bc_per_edge: number of points on each of the four spatial edges.
+        seed: seed for the IC draw; the BC draw uses seed + 1.
+        epsilon, ic, ic_seed: as in sample_points, for the IC targets.
+        device: device to place the tensors on.
+
+    Returns:
+        (ic_points (n_ic, 3), ic_values (n_ic, 1), bc_points (4 * n_bc_per_edge, 3)).
+        bc_points are ordered left, right, bottom, top edge -- the equal-block
+        layout bc_loss expects -- with requires_grad=True.
+    """
+    lo = torch.tensor(lower)
+    hi = torch.tensor(upper)
+
+    unit_ic = torch.rand(n_ic, 2, generator=torch.Generator().manual_seed(seed))
+    xy_ic = lo[:2] + unit_ic * (hi[:2] - lo[:2])
+    ic_points = torch.cat([xy_ic, torch.full((n_ic, 1), lower[2])], dim=1).to(device)
+    ic_values = ic_targets(ic_points, ic=ic, epsilon=epsilon, ic_seed=ic_seed)
+
+    bc_gen = torch.Generator().manual_seed(seed + 1)
+    edges = []
+    # (fixed axis, fixed value, free spatial axis), in bc_loss's edge order.
+    for axis, value, free in ((0, lower[0], 1), (0, upper[0], 1), (1, lower[1], 0), (1, upper[1], 0)):
+        unit = torch.rand(n_bc_per_edge, 2, generator=bc_gen)
+        edge = torch.empty(n_bc_per_edge, 3)
+        edge[:, axis] = value
+        edge[:, free] = lo[free] + unit[:, 0] * (hi[free] - lo[free])
+        edge[:, 2] = lo[2] + unit[:, 1] * (hi[2] - lo[2])
+        edges.append(edge)
+    bc_points = torch.cat(edges, dim=0).to(device).requires_grad_(True)
+
+    return ic_points, ic_values, bc_points
+
+
 def sample_points(
     lower: tuple[float, float, float],
     upper: tuple[float, float, float],
@@ -91,13 +158,7 @@ def sample_points(
     idx = torch.randperm(x_ic.shape[0], device=device)[:pde_at_t0]
     t0_points = x_ic[idx]
     x_pde = with_pde_at_t0(collocation.to(device), t0_points)
-    # IC targets need no grad, so evaluating them in numpy is fine.
-    x_ic_np = x_ic.cpu().numpy()
-    ic_values = torch.as_tensor(
-        initial_condition(ic, x_ic_np[:, 0], x_ic_np[:, 1], epsilon=epsilon, seed=ic_seed),
-        dtype=x_ic.dtype,
-        device=device,
-    ).unsqueeze(1)
+    ic_values = ic_targets(x_ic, ic=ic, epsilon=epsilon, ic_seed=ic_seed)
 
     x_edge = torch.linspace(lower[0], upper[0], n_bc, device=device)
     y_edge = torch.linspace(lower[1], upper[1], n_bc, device=device)

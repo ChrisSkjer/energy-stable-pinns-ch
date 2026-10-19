@@ -24,7 +24,7 @@ from src.pinn.losses import (
 from src.pinn.model import PINN
 from src.pinn.run_paths import checkpoints_dir_for, final_path_for, run_dir_for
 from src.pinn.collocation import COLLOCATION_STRATEGIES, RESAMPLABLE, heldout_points, make_sampler
-from src.pinn.sampling import TrainingPoints, sample_points, with_pde_at_t0
+from src.pinn.sampling import TrainingPoints, heldout_ic_bc_points, sample_points, with_pde_at_t0
 
 
 def parse_args() -> argparse.Namespace:
@@ -175,11 +175,16 @@ def parse_args() -> argparse.Namespace:
         "--heldout-every",
         type=int,
         default=0,
-        help="Log the unweighted PDE residuals on a fixed set of fresh points "
-        "(never trained on) every this many Adam epochs and L-BFGS steps. "
+        help="Log the unweighted PDE residuals, IC loss and BC loss on fixed "
+        "sets of fresh uniform random points (never trained on) every this "
+        "many Adam epochs and L-BFGS steps. "
         "0 = off. Stored under the checkpoint's 'heldout' key.",
     )
     parser.add_argument("--heldout-n", type=int, default=20000, help="Number of held-out points")
+    parser.add_argument("--heldout-n-ic", type=int, default=10000, help="Number of held-out IC points on t=0")
+    parser.add_argument(
+        "--heldout-n-bc", type=int, default=2500, help="Number of held-out BC points per spatial edge"
+    )
     parser.add_argument("--n-ic", type=int, default=100, help="Side length of the IC point grid")
     parser.add_argument("--n-bc", type=int, default=100, help="Side length of the BC point grid, per edge")
     parser.add_argument(
@@ -319,19 +324,32 @@ def train(args: argparse.Namespace) -> None:
         for name, value in losses.items():
             history.setdefault(name, []).append(value.item())
 
-    # Unweighted PDE residuals on fixed fresh points, against the history
-    # step they were taken at -- the training loss alone can't show the
-    # network overfitting its own collocation points.
+    # Unweighted PDE residuals and IC/BC losses on fixed fresh points,
+    # against the history step they were taken at -- the training loss alone
+    # can't show the network overfitting its own collocation/IC/BC points.
     heldout: dict[str, list[float]] | None = None
     if args.heldout_every:
-        heldout = {"step": [], "pde_u": [], "pde_mu": []}
+        heldout = {"step": [], "pde_u": [], "pde_mu": [], "ic": [], "bc": []}
         x_heldout = heldout_points(lower, upper, args.heldout_n, seed=args.sampling_seed + 1, device=device)
+        ic_heldout, ic_values_heldout, bc_heldout = heldout_ic_bc_points(
+            lower,
+            upper,
+            args.heldout_n_ic,
+            args.heldout_n_bc,
+            seed=args.sampling_seed + 2,
+            epsilon=args.epsilon,
+            ic=args.ic,
+            ic_seed=args.ic_seed,
+            device=device,
+        )
 
     def record_heldout() -> None:
         loss_u, loss_mu = pde_residual_losses(model, x_heldout, epsilon=args.epsilon)
         heldout["step"].append(len(history["total"]))
         heldout["pde_u"].append(loss_u.item())
         heldout["pde_mu"].append(loss_mu.item())
+        heldout["ic"].append(ic_loss(model, ic_heldout, ic_values_heldout).item())
+        heldout["bc"].append(bc_loss(model, bc_heldout).item())
 
     best_adam_total: float | None = None
     best_adam_state: dict[str, torch.Tensor] | None = None

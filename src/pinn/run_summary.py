@@ -25,6 +25,8 @@ _RUN_SUMMARY_GROUPS: list[tuple[str, tuple[str, ...]]] = [
             "pde_at_t0",
             "heldout_every",
             "heldout_n",
+            "heldout_n_ic",
+            "heldout_n_bc",
         ),
     ),
     (
