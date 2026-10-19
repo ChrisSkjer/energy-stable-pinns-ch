@@ -172,10 +172,12 @@ the tag can point at each other later.
   explorer to preview it inline, no other tool needed. To turn a full frame
   sequence into an animation for the thesis:
   ```bash
-  ffmpeg -framerate 10 -i frame_%06d.png -pix_fmt yuv420p output.mp4
+  .venv\Scripts\python.exe scripts/make_fem_video.py results/my_run              # GIF, Pillow only
+  .venv\Scripts\python.exe scripts/make_fem_video.py results/my_run -o run.mp4   # MP4, needs ffmpeg
   ```
-  (run from inside the `frames/` folder; `ffmpeg` isn't in `environment.yml`
-  yet — `conda install -n fenicsx-env -c conda-forge ffmpeg` if you want it.)
+  `--fps`, `--every N` (every N-th frame) and `--scale 0.5` (smaller GIF) are
+  optional. Don't use ffmpeg's `-i frame_%06d.png` directly: the frames are
+  numbered by time step (000000, 000005, ...), and ffmpeg stops at the first gap.
 
 ## Quick PINN demo (no thesis code — a sandbox notebook)
 

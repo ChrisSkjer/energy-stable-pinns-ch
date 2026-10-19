@@ -87,7 +87,7 @@ def solve(
 
     c = ufl.variable(c)
     # symmetric double-well bulk free-energy density; phases at c = -1, +1
-    f = 1 / 4 * (1 - c**2) ** 2  # kan endre, se notat
+    f = 1 / 4 * (1 - c**2) ** 2  
     dfdc = ufl.diff(f, c)
 
     lam = config.epsilon**2  # interfacial-energy coefficient
