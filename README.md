@@ -1,5 +1,7 @@
 # Energy-Stable Physics-Informed Neural Networks for the Cahn-Hilliard Equation
 
+> **Short on time?** Read the [TL;DR](TLDR.md).
+
 Master's thesis project investigating whether Physics-Informed Neural
 Networks (PINNs) augmented with an energy-dissipation penalty term and
 sequential transfer learning can solve the Cahn-Hilliard phase-field
