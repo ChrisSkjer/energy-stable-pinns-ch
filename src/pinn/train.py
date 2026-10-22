@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import os
+import time
 
 import torch
 
@@ -21,6 +22,7 @@ from src.pinn.losses import (
     ic_loss,
     pde_residual_losses,
 )
+from src.pinn.layer_stats import LayerStatsLog, update_ratios, weight_snapshot
 from src.pinn.model import PINN
 from src.pinn.run_paths import checkpoints_dir_for, final_path_for, run_dir_for
 from src.pinn.collocation import COLLOCATION_STRATEGIES, RESAMPLABLE, heldout_points, make_sampler
@@ -184,6 +186,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--heldout-n-ic", type=int, default=10000, help="Number of held-out IC points on t=0")
     parser.add_argument(
         "--heldout-n-bc", type=int, default=2500, help="Number of held-out BC points per spatial edge"
+    )
+    parser.add_argument(
+        "--layer-stats-every",
+        type=int,
+        default=0,
+        help="Log per-layer statistics (gradient norm of each loss term, "
+        "weight norm, update ratio, tanh saturation -- see "
+        "src/pinn/layer_stats.py) every this many Adam epochs and L-BFGS "
+        "steps, to check for vanishing gradients. 0 = off. Costs one extra "
+        "backward pass per loss term at each logged step. Stored under the "
+        "checkpoint's 'layer_stats' key.",
     )
     parser.add_argument("--n-ic", type=int, default=100, help="Side length of the IC point grid")
     parser.add_argument("--n-bc", type=int, default=100, help="Side length of the BC point grid, per edge")
@@ -351,18 +364,43 @@ def train(args: argparse.Namespace) -> None:
         heldout["ic"].append(ic_loss(model, ic_heldout, ic_values_heldout).item())
         heldout["bc"].append(bc_loss(model, bc_heldout).item())
 
+    layer_stats = LayerStatsLog(model) if args.layer_stats_every else None
+    # Wall-clock seconds per optimizer phase (including logging/checkpoint
+    # overhead), for comparing training cost against FEM.
+    timing = {"adam_seconds": 0.0, "lbfgs_seconds": 0.0}
+
+    def checkpoint_extras() -> dict:
+        extras = {"timing": dict(timing)}
+        if layer_stats is not None:
+            extras["layer_stats"] = layer_stats.as_dict()
+        return extras
+
+    def activation_points() -> torch.Tensor:
+        return points.collocation[:5000]
+
     best_adam_total: float | None = None
     best_adam_state: dict[str, torch.Tensor] | None = None
     adam_stalled = 0
+    adam_start = time.perf_counter()
     for epoch in range(epochs):
+        stats_now = layer_stats is not None and (
+            epoch % args.layer_stats_every == 0 or epoch == epochs - 1
+        )
         optimizer.zero_grad()
         losses = compute_loss(points)
+        if stats_now:
+            # Index of this epoch's entry in history: the stats belong to the
+            # weights the loss was evaluated at, i.e. before the update.
+            layer_stats.record(len(history.get("total", [])), "adam", model, losses, activation_points())
+            weights_before = weight_snapshot(model)
         losses["total"].backward()
         # The loss belongs to the weights *before* this update, so snapshot
         # them now in case they turn out to be the best seen.
         if args.adam_patience:
             pre_step_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
         optimizer.step()
+        if stats_now:
+            layer_stats.add_update_ratio(update_ratios(model, weights_before))
         record(losses)
         total = losses["total"].item()
         lr = optimizer.param_groups[0]["lr"]
@@ -372,7 +410,11 @@ def train(args: argparse.Namespace) -> None:
             record_heldout()
         if epoch % args.checkpoint_every == 0:
             checkpoint_path = os.path.join(checkpoints_dir, f"checkpoint_step{len(history['total']):06d}.pt")
-            save_checkpoint(model, checkpoint_path, args, history, heldout, adam_steps=len(history["total"]))
+            timing["adam_seconds"] = time.perf_counter() - adam_start
+            save_checkpoint(
+                model, checkpoint_path, args, history, heldout,
+                adam_steps=len(history["total"]), extras=checkpoint_extras(),
+            )
 
         new_collocation = sampler.update(model, epoch + 1)
         if new_collocation is not None:
@@ -397,6 +439,7 @@ def train(args: argparse.Namespace) -> None:
                         f"less than {args.adam_tol:g} (relative) for {adam_stalled} consecutive epochs"
                     )
                     break
+    timing["adam_seconds"] = time.perf_counter() - adam_start
 
     if best_adam_state is not None:
         model.load_state_dict(best_adam_state)
@@ -420,14 +463,26 @@ def train(args: argparse.Namespace) -> None:
 
     best_total: float | None = None
     stalled = 0
+    lbfgs_start = time.perf_counter()
     for lbfgs_step in range(lbfgs_steps):
+        stats_now = layer_stats is not None and lbfgs_step % args.layer_stats_every == 0
+        if stats_now:
+            # The step's first closure call evaluates these same weights, so
+            # this lines up with that history entry.
+            layer_stats.record(len(history["total"]), "lbfgs", model, compute_loss(points), activation_points())
+            weights_before = weight_snapshot(model)
         lbfgs.step(closure)
+        if stats_now:
+            layer_stats.add_update_ratio(update_ratios(model, weights_before))
+        timing["lbfgs_seconds"] = time.perf_counter() - lbfgs_start
         print(f"[lbfgs] step {lbfgs_step + 1:3d}/{lbfgs_steps} {format_losses(last_losses)}")
         if heldout is not None and (lbfgs_step + 1) % args.heldout_every == 0:
             record_heldout()
         if lbfgs_step % args.checkpoint_every == 0:
             checkpoint_path = os.path.join(checkpoints_dir, f"checkpoint_step{len(history['total']):06d}.pt")
-            save_checkpoint(model, checkpoint_path, args, history, heldout, adam_steps=adam_steps)
+            save_checkpoint(
+                model, checkpoint_path, args, history, heldout, adam_steps=adam_steps, extras=checkpoint_extras()
+            )
 
         total = last_losses["total"].item()
         if is_improvement(total, best_total, args.lbfgs_tol):
@@ -445,7 +500,7 @@ def train(args: argparse.Namespace) -> None:
 
     if heldout is not None and (not heldout["step"] or heldout["step"][-1] != len(history["total"])):
         record_heldout()
-    save_checkpoint(model, final_path, args, history, heldout, adam_steps=adam_steps)
+    save_checkpoint(model, final_path, args, history, heldout, adam_steps=adam_steps, extras=checkpoint_extras())
     print(f"final model: {final_path}")
 
 
@@ -456,6 +511,7 @@ def save_checkpoint(
     history: dict[str, list[float]],
     heldout: dict[str, list[float]] | None = None,
     adam_steps: int | None = None,
+    extras: dict | None = None,
 ) -> None:
     """Save model weights plus the metadata needed to reload them.
 
@@ -475,12 +531,18 @@ def save_checkpoint(
     `adam_steps` is saved as "adam_steps": how many leading history entries
     are Adam epochs, the rest being L-BFGS closure evaluations (see
     src/pinn/run_summary.py::adam_step_count).
+
+    `extras` are merged in as further top-level keys: train.py passes
+    "timing" (adam_seconds, lbfgs_seconds) and, with --layer-stats-every,
+    "layer_stats" (src/pinn/layer_stats.py::LayerStatsLog.as_dict).
     """
     checkpoint = {"model_state": model.state_dict(), "args": vars(args), "history": history}
     if heldout is not None:
         checkpoint["heldout"] = heldout
     if adam_steps is not None:
         checkpoint["adam_steps"] = adam_steps
+    if extras:
+        checkpoint.update(extras)
     torch.save(checkpoint, path)
 
 

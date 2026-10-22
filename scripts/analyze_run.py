@@ -1,4 +1,4 @@
-"""Run the full evaluate -> diagnostics -> plot pipeline for one trained run.
+"""Run the full evaluate -> diagnostics -> plot -> metrics pipeline for one trained run.
 
 Wraps the three CLIs documented in the README's "Evaluating and plotting a
 trained checkpoint" section so the run name is typed once instead of being
@@ -133,6 +133,13 @@ def main() -> None:
         if args.profile_y is not None:
             plot_args += ["--profile-y", str(args.profile_y)]
     run_step("plot_results", "src.pinn.plot_results", plot_args)
+
+    metrics_args = ["--run-dir", str(Path(checkpoint).parent)]
+    if args.fem_fields:
+        metrics_args += ["--fem-fields", args.fem_fields]
+    if args.fem_diagnostics:
+        metrics_args += ["--fem-diagnostics", args.fem_diagnostics]
+    run_step("metrics", "src.pinn.run_metrics", metrics_args)
 
     print(f"\nDone -- plots in {Path(checkpoint).parent / 'plots'}")
 

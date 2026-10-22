@@ -50,13 +50,18 @@ from src.common.plotting import (
     load_diagnostics,
     plot_comparison,
     plot_energy_dissipation,
+    plot_activation_stats,
     plot_field,
+    plot_grad_depth_profile,
+    plot_gradient_balance,
     plot_heldout_ic_bc,
     plot_heldout_residual,
     plot_line_profile,
+    plot_layer_grad_norms,
     plot_loss_history,
     plot_mass_conservation,
     plot_relative_l2_error,
+    plot_update_ratio,
 )
 from src.pinn.run_paths import infer_run_dir
 from src.pinn.run_summary import adam_step_count, format_run_summary
@@ -91,7 +96,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Path to a .pt checkpoint written by src/pinn/train.py. "
         "Produces a training-loss-vs-step plot from its bundled history, and "
-        "heldout_residual.* when it was trained with --heldout-every.",
+        "heldout_residual.* when it was trained with --heldout-every, and "
+        "the per-layer gradient/activation plots when trained with --layer-stats-every.",
     )
     parser.add_argument(
         "--diagnostics",
@@ -435,6 +441,40 @@ def plot_heldout(checkpoint_path: str, output_dir: str, dpi: int = 150, fmt: str
     return saved
 
 
+def plot_layer_stats(checkpoint_path: str, output_dir: str, dpi: int = 150, fmt: str = "pdf") -> list[str]:
+    """Save the per-layer training diagnostics of a checkpoint trained with
+    --layer-stats-every (see src/pinn/layer_stats.py):
+
+    - layer_grad_norms: gradient norm per layer vs. step, one panel per loss term
+    - grad_depth_profile: gradient norm vs. layer depth at a few steps
+    - update_ratio: relative weight change per optimizer step, per layer
+    - activation_stats: tanh saturation and spread per hidden layer
+    - gradient_balance: whole-network gradient norm of each loss term
+
+    Returns the saved paths: none when the checkpoint has no layer stats.
+    """
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    if "layer_stats" not in checkpoint:
+        return []
+    stats = checkpoint["layer_stats"]
+    adam_steps = adam_step_count(checkpoint["args"], checkpoint["history"], checkpoint.get("adam_steps"))
+    figures = {
+        "layer_grad_norms": plot_layer_grad_norms(stats, adam_steps),
+        "grad_depth_profile": plot_grad_depth_profile(stats).figure,
+        "activation_stats": plot_activation_stats(stats, adam_steps),
+        "gradient_balance": plot_gradient_balance(stats, adam_steps).figure,
+    }
+    if stats["update_ratio"]:
+        figures["update_ratio"] = plot_update_ratio(stats, adam_steps).figure
+    saved = []
+    for name, fig in figures.items():
+        path = os.path.join(output_dir, f"{name}.{fmt}")
+        fig.savefig(path, dpi=dpi, bbox_inches="tight")
+        plt.close(fig)
+        saved.append(path)
+    return saved
+
+
 def write_run_summary(checkpoint_path: str, output_dir: str) -> str:
     """Write <output_dir>/run_summary.txt from a train.py checkpoint --
     network size, domain, sampling, optimizer, loss weights, parameter
@@ -525,6 +565,9 @@ if __name__ == "__main__":
         )
         saved_paths.append(write_run_summary(cli_args.checkpoint, cli_args.output_dir))
         saved_paths += plot_heldout(
+            cli_args.checkpoint, cli_args.output_dir, dpi=cli_args.dpi, fmt=cli_args.format
+        )
+        saved_paths += plot_layer_stats(
             cli_args.checkpoint, cli_args.output_dir, dpi=cli_args.dpi, fmt=cli_args.format
         )
     if cli_args.diagnostics is not None or cli_args.fem_diagnostics is not None:

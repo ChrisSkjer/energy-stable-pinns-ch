@@ -36,8 +36,8 @@ Other retrieval routes (Colab file browser, Drive mount) are in
 
 ## 1. The one-liner
 
-`scripts/analyze_run.py` runs evaluate → diagnostics → plot in sequence with
-the run name typed once. It changes no defaults.
+`scripts/analyze_run.py` runs evaluate → diagnostics → plot → metrics in
+sequence with the run name typed once. It changes no defaults.
 
 ```powershell
 .venv\Scripts\python.exe scripts\analyze_run.py $run
@@ -247,6 +247,50 @@ fresh/train ratio (≫ 1 = overfitting the collocation points), and fresh
 `pde_u` per t-window, log-spaced towards t=0 where the residual tends to
 hide. Works on checkpoints from before the sampling flags existed.
 
+## 5. Is every layer learning? (vanishing gradients)
+
+Two tools, depending on whether the run logged it during training.
+
+**During training** — train with `--layer-stats-every K` (e.g. 25). Every `K`
+Adam epochs and L-BFGS steps it logs, per linear layer: the gradient norm of
+each loss term, the weight norm, the update ratio ‖ΔW‖/‖W‖ of that step, and
+the tanh saturation of each hidden layer. Costs one extra backward pass per
+loss term at each logged step. `plot_results --checkpoint` then writes:
+
+| Plot | What to look for |
+| --- | --- |
+| `layer_grad_norms` | One panel per loss term, one line per layer (light = input). Vanishing gradients: light lines orders of magnitude below dark ones |
+| `grad_depth_profile` | Gradient norm vs. depth at a few steps. Flat = healthy; rising steeply towards `out` = input layers starved |
+| `update_ratio` | How far each layer actually moves per step. Shaded band 1e-4..1e-2 is the healthy Adam range; far below = frozen layer |
+| `activation_stats` | % of tanh units with \|a\| > 0.99 (pass back < 2% of their gradient) and activation std per hidden layer |
+| `gradient_balance` | Whole-network gradient norm per loss term — which term actually drives the update |
+
+**After the fact** — for runs trained without the flag (a single snapshot at
+the checkpoint's weights, on freshly drawn points with the run's settings):
+
+```powershell
+.venv\Scripts\python.exe scripts\inspect_gradients.py $run
+.venv\Scripts\python.exe scripts\inspect_gradients.py $run --n-collocation 5000   # faster on CPU
+```
+
+Writes `plots/gradient_snapshot.txt` (per-layer norms per term, input/output
+ratio, saturation) and `plots/gradient_histograms.<fmt>` (distribution of
+log10|∂L/∂W| per layer, one curve per term — Wang, Teng & Perdikaris 2021).
+
+## 6. Scalar metrics
+
+`python -m src.pinn.run_metrics --run-dir results/pinn_models/$run [--fem-fields ...]`
+(the last step of `analyze_run.py`) writes `metrics.json` and `metrics.txt`.
+Each group is skipped when its input file is missing.
+
+| Group | Metrics |
+| --- | --- |
+| `physics` | `energy_increase_fraction` (share of time steps where E rises; 0 for exact CH), `energy_max_rise_rel` (largest climb above the running minimum / E(0)), `energy_decay_rel`, `mass_drift_max_abs`/`_rel` |
+| `bounds` | `u_overshoot` = max\|u\| − 1 |
+| `vs_fem_fields` | relative L2 of u and mu (mean, max, per t), `linf_u_max`, `phase_fraction_error_max` (area with u > 0) |
+| `vs_fem_energy` | `energy_error_max_rel`, `energy_error_end_rel` (vs. FEM, / E_FEM(0)) |
+| `training` | final losses, parameters, steps, `train_seconds` (runs trained after it was added), `heldout_over_train` per term (≫ 1 = overfitting), and with `--layer-stats-every`: `grad_in_over_out`, `grad_min_over_max_layer`, saturation, slowest Adam layer's update ratio |
+
 ## Output map
 
 After a full pass:
@@ -257,11 +301,16 @@ results/pinn_models/<run-name>/
 ├── final.pt
 ├── evaluation.npz                  # step 2a
 ├── diagnostics.csv                 # step 2b
+├── metrics.json, metrics.txt       # section 6
 └── plots/                          # step 2c
     ├── field_u_000_t0.pdf ...                                # only with --field-plots
     ├── field_mu_000_t0.pdf ...                               # only with --field-plots
     ├── loss_history.pdf
     ├── heldout_residual.pdf                                   # only if trained with --heldout-every
+    ├── layer_grad_norms.pdf, grad_depth_profile.pdf,
+    │   update_ratio.pdf, activation_stats.pdf,
+    │   gradient_balance.pdf                                   # only if trained with --layer-stats-every
+    ├── gradient_snapshot.txt, gradient_histograms.pdf        # scripts/inspect_gradients.py
     ├── run_summary.txt
     ├── energy_dissipation.pdf
     ├── mass_conservation.pdf

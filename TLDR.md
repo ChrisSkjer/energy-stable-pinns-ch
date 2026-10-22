@@ -32,7 +32,7 @@ Run from the repo root, always with `-m`.
   refuses to overwrite an existing run unless you pass `--overwrite`.
 - Smoke-test training: `python -m src.pinn.train --smoke-test --run-name demo_run`
 - Analyze a run: `python scripts/analyze_run.py <run>`. This runs evaluate,
-  diagnostics and plots in one go. Add `--fem-fields` / `--fem-diagnostics`
+  diagnostics, plots and scalar metrics (`metrics.json`) in one go. Add `--fem-fields` / `--fem-diagnostics`
   for PINN-vs-FEM comparisons.
 - Tests: `python -m pytest tests/`. The FEM test skips itself outside WSL.
 
@@ -40,6 +40,9 @@ Run from the repo root, always with `-m`.
 
 - Collocation sampling: `--collocation random|sobol|grid`, plus `--resample-every`
 - Held-out residual tracking: `--heldout-every`
+- Per-layer gradient/saturation logging (vanishing gradients):
+  `--layer-stats-every`; for already-trained runs,
+  `scripts/inspect_gradients.py <run>`
 - Adam has opt-in LR plateau scheduling and early stopping.
 - L-BFGS stops early by default. Each `--lbfgs-steps` step runs up to 20
   inner iterations.

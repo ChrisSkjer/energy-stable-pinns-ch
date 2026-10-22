@@ -484,3 +484,240 @@ def plot_mass_conservation(
     ax.grid(True, alpha=0.3)
     ax.legend()
     return ax
+
+
+# Loss-term colours, matching plot_heldout_residual/plot_heldout_ic_bc.
+_TERM_COLORS = {"pde": "C0", "pde_u": "C0", "pde_mu": "C1", "ic": "C2", "bc": "C3", "energy": "C4", "total": "black"}
+_TERM_ORDER = ("pde", "pde_u", "pde_mu", "ic", "bc", "energy", "total")
+
+
+def _ordered_terms(names) -> list[str]:
+    """Known loss terms in _TERM_ORDER, then any others in their given order."""
+    names = list(names)
+    return [t for t in _TERM_ORDER if t in names] + [t for t in names if t not in _TERM_ORDER]
+
+
+def _term_color(term: str, terms: list[str]) -> str:
+    return _TERM_COLORS.get(term, f"C{5 + terms.index(term) % 5}")
+
+
+def _layer_colors(n: int):
+    """One hue, light (input layer) -> dark (output layer): layers are ordered."""
+    return plt.cm.Blues(np.linspace(0.35, 1.0, n))
+
+
+def _mark_adam_lbfgs(ax, adam_steps: int | None, steps) -> None:
+    if adam_steps is not None and len(steps) and steps[0] < adam_steps <= steps[-1]:
+        ax.axvline(adam_steps, lw=1, ls=":", color="0.4", label="Adam -> L-BFGS")
+
+
+def plot_layer_grad_norms(layer_stats: dict, adam_steps: int | None = None):
+    """Per-layer gradient norm ||dL_term/dW_l|| vs. step, one panel per loss term.
+
+    Args:
+        layer_stats: the "layer_stats" entry of a checkpoint trained with
+            --layer-stats-every (src/pinn/layer_stats.py::LayerStatsLog.as_dict).
+        adam_steps: where L-BFGS takes over (dotted line), or None.
+
+    Vanishing gradients: the light (input-side) curves sitting orders of
+    magnitude below the dark (output-side) ones. All panels share one y axis,
+    so they also show which term dominates the update.
+
+    Returns:
+        The figure.
+    """
+    terms = _ordered_terms(layer_stats["grad_norm"])
+    steps = np.asarray(layer_stats["step"])
+    names = layer_stats["layers"]
+    colors = _layer_colors(len(names))
+    ncols = min(3, len(terms))
+    nrows = int(np.ceil(len(terms) / ncols))
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(4.2 * ncols, 3.2 * nrows), sharex=True, sharey=True, squeeze=False
+    )
+    for ax, term in zip(axes.flat, terms):
+        norms = np.asarray(layer_stats["grad_norm"][term])
+        for j, name in enumerate(names):
+            ax.semilogy(steps, norms[:, j], lw=1.5, color=colors[j], label=name)
+        _mark_adam_lbfgs(ax, adam_steps, steps)
+        ax.set_title(term)
+        ax.grid(True, which="both", alpha=0.3)
+    for ax in axes.flat[len(terms):]:
+        ax.set_visible(False)
+    for ax in axes[:, 0]:
+        ax.set_ylabel(r"$\|\partial L / \partial W_l\|_2$")
+    for ax in axes[-1, :]:
+        ax.set_xlabel("step")
+    fig.suptitle("Gradient norm per layer, by loss term (weighted)")
+    fig.tight_layout()
+    handles, labels = axes.flat[0].get_legend_handles_labels()
+    fig.legend(handles, labels, title="layer", fontsize="small", loc="center left", bbox_to_anchor=(1.0, 0.5))
+    return fig
+
+
+def plot_grad_depth_profile(layer_stats: dict, term: str = "total", n_curves: int = 6, ax=None):
+    """Gradient norm against layer depth, one curve per logged step.
+
+    The direct vanishing/exploding-gradient picture: a flat profile means
+    every layer receives a comparable gradient; a profile rising steeply
+    towards "out" means the input-side layers are starved. Earlier records
+    are lighter, later ones darker.
+
+    Returns:
+        The axes drawn on.
+    """
+    if ax is None:
+        _, ax = plt.subplots()
+    norms = np.asarray(layer_stats["grad_norm"][term])
+    steps = layer_stats["step"]
+    phases = layer_stats["phase"]
+    picks = np.unique(np.linspace(0, len(steps) - 1, min(n_curves, len(steps))).round().astype(int))
+    colors = plt.cm.Greys(np.linspace(0.35, 1.0, len(picks)))
+    depth = np.arange(len(layer_stats["layers"]))
+    for color, k in zip(colors, picks):
+        ax.semilogy(depth, norms[k], lw=2, marker="o", ms=5, color=color, label=f"step {steps[k]} ({phases[k]})")
+    ax.set_xticks(depth, layer_stats["layers"])
+    ax.set_xlabel("layer (input -> output)")
+    ax.set_ylabel(r"$\|\partial L / \partial W_l\|_2$")
+    ax.set_title(f"Gradient norm vs. depth ({term} loss)")
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend(fontsize="small")
+    return ax
+
+
+def plot_update_ratio(layer_stats: dict, adam_steps: int | None = None, ax=None):
+    """Relative weight update ||dW_l|| / ||W_l|| of one optimizer step, per layer.
+
+    What a layer actually moves by (Adam normalises gradients, so a small
+    gradient alone doesn't prove a layer is frozen). The shaded band
+    1e-4..1e-2 is the usual healthy Adam range; curves far below it are
+    layers that have stopped learning. One L-BFGS step runs up to 20 inner
+    iterations, so its ratios are naturally larger.
+
+    Returns:
+        The axes drawn on.
+    """
+    if ax is None:
+        _, ax = plt.subplots()
+    ratios = np.asarray(layer_stats["update_ratio"])
+    steps = np.asarray(layer_stats["step"][: len(ratios)])
+    names = layer_stats["layers"]
+    colors = _layer_colors(len(names))
+    ax.axhspan(1e-4, 1e-2, color="0.92", zorder=0)
+    for j, name in enumerate(names):
+        ax.semilogy(steps, ratios[:, j], lw=1.5, color=colors[j], label=name)
+    _mark_adam_lbfgs(ax, adam_steps, steps)
+    ax.set_xlabel(STEP_LABEL)
+    ax.set_ylabel(r"$\|\Delta W_l\|_2 / \|W_l\|_2$ per step")
+    ax.set_title("Relative weight update per layer")
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend(title="layer", fontsize="small")
+    return ax
+
+
+def plot_activation_stats(layer_stats: dict, adam_steps: int | None = None):
+    """Hidden-layer tanh activations: saturated fraction (left) and std (right).
+
+    Saturated units (|tanh| > 0.99) pass back < 2% of their gradient, so a
+    rising saturation curve is the mechanism behind vanishing gradients; a
+    collapsing std means the layer's output has become nearly constant.
+
+    Returns:
+        The figure.
+    """
+    steps = np.asarray(layer_stats["step"])
+    sat = np.asarray(layer_stats["act_saturation"])
+    std = np.asarray(layer_stats["act_std"])
+    colors = _layer_colors(sat.shape[1])
+    fig, (ax_sat, ax_std) = plt.subplots(1, 2, figsize=(10, 3.6), sharex=True)
+    for j in range(sat.shape[1]):
+        ax_sat.plot(steps, 100 * sat[:, j], lw=1.5, color=colors[j], label=f"hidden {j + 1}")
+        ax_std.plot(steps, std[:, j], lw=1.5, color=colors[j], label=f"hidden {j + 1}")
+    for ax in (ax_sat, ax_std):
+        _mark_adam_lbfgs(ax, adam_steps, steps)
+        ax.set_xlabel("step")
+        ax.set_ylim(bottom=0)
+        ax.grid(True, alpha=0.3)
+    ax_sat.set_ylabel("saturated units (%)")
+    ax_sat.set_title(r"Saturation ($|\tanh| > 0.99$)")
+    ax_std.set_ylabel("std of activations")
+    ax_std.set_title("Activation spread")
+    ax_sat.legend(fontsize="small")
+    fig.tight_layout()
+    return fig
+
+
+def plot_gradient_balance(layer_stats: dict, adam_steps: int | None = None, ax=None):
+    """Whole-network gradient norm of each (weighted) loss term vs. step.
+
+    If one term's curve sits far above the rest, the optimizer is effectively
+    minimising that term alone -- the loss weights are out of balance even
+    if every term's *value* looks reasonable.
+
+    Returns:
+        The axes drawn on.
+    """
+    if ax is None:
+        _, ax = plt.subplots()
+    steps = np.asarray(layer_stats["step"])
+    terms = [t for t in _ordered_terms(layer_stats["grad_norm"]) if t != "total"]
+    for term in terms:
+        norms = np.asarray(layer_stats["grad_norm"][term])
+        ax.semilogy(steps, np.sqrt((norms**2).sum(axis=1)), lw=2, color=_term_color(term, terms), label=term)
+    _mark_adam_lbfgs(ax, adam_steps, steps)
+    ax.set_xlabel(STEP_LABEL)
+    ax.set_ylabel(r"$\|\nabla_W L_{term}\|_2$ (all weight matrices)")
+    ax.set_title("Gradient balance between loss terms")
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend()
+    return ax
+
+
+def plot_gradient_histograms(grads: dict[str, list[np.ndarray]], layer_names: list[str], bins: int = 80):
+    """Distribution of dL_term/dW entries per layer, one panel per layer,
+    one curve per loss term (Wang, Teng & Perdikaris 2021, Fig. 2 style).
+
+    Args:
+        grads: term -> per-layer 1-D arrays of gradient entries
+            (src/pinn/layer_stats.py::per_term_gradients, as numpy).
+        layer_names: panel labels, input layer first.
+
+    Binned by magnitude, log10|dL/dW|, since the terms' gradients typically
+    differ by orders of magnitude: a term whose curve sits far to the left of
+    the others contributes almost nothing to the update in that layer. All
+    panels share one x axis, so the panels can also be compared across depth
+    -- curves drifting left towards the input layer is vanishing gradients.
+
+    Returns:
+        The figure.
+    """
+    n = len(layer_names)
+    ncols = min(3, n)
+    nrows = int(np.ceil(n / ncols))
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(4.2 * ncols, 3.0 * nrows), sharex=True, sharey=True, squeeze=False
+    )
+    terms = _ordered_terms(grads)
+    log_mag = {t: [np.log10(np.abs(g[g != 0])) for g in grads[t]] for t in terms}
+    finite = np.concatenate([a for t in terms for a in log_mag[t]])
+    lo, hi = np.quantile(finite, [0.001, 1.0]) if finite.size else (-1.0, 1.0)
+    edges = np.linspace(np.floor(lo), np.ceil(hi), bins + 1)
+    centers = 0.5 * (edges[1:] + edges[:-1])
+    for j, ax in enumerate(axes.flat):
+        if j >= n:
+            ax.set_visible(False)
+            continue
+        for t in terms:
+            hist, _ = np.histogram(log_mag[t][j], bins=edges, density=True)
+            ax.plot(centers, hist, lw=1.5, color=_term_color(t, terms), label=t)
+        ax.set_title(f"layer {layer_names[j]}")
+        ax.set_ylim(bottom=0)
+        ax.grid(True, alpha=0.3)
+    axes.flat[0].legend(fontsize="small")
+    for ax in axes[-1, :]:
+        ax.set_xlabel(r"$\log_{10} |\partial L / \partial W|$")
+    for ax in axes[:, 0]:
+        ax.set_ylabel("density")
+    fig.suptitle("Gradient distribution per layer, by loss term (weighted)")
+    fig.tight_layout()
+    return fig
