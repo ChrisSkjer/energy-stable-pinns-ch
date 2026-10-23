@@ -94,3 +94,38 @@ def test_noise_has_zero_normal_derivative_at_walls():
 def test_unknown_name_raises():
     with pytest.raises(ValueError, match="cross"):
         initial_condition("bogus", np.zeros(1), np.zeros(1), epsilon=EPS)
+
+
+from src.common.initial_conditions import (  # noqa: E402
+    INITIAL_CONDITIONS_1D,
+    cosine_growth_rate,
+    initial_condition_1d,
+)
+
+
+@pytest.mark.parametrize("name", sorted(INITIAL_CONDITIONS_1D))
+def test_1d_shape_range_and_flat_walls(name):
+    x = np.linspace(0.0, 1.0, 1001)
+    u = initial_condition_1d(name, x, epsilon=EPS)
+    assert u.shape == x.shape
+    assert np.all(np.abs(u) <= 1.0)
+    # No-flux BC at t = 0: one-sided slope at each wall is small.
+    h = x[1] - x[0]
+    assert abs(u[1] - u[0]) / h < 0.2 and abs(u[-1] - u[-2]) / h < 0.2
+
+
+def test_1d_step_is_minus_one_left_plus_one_right():
+    u = initial_condition_1d("step", np.array([0.0, 0.5, 1.0]), epsilon=EPS)
+    np.testing.assert_allclose(u, [-1.0, 0.0, 1.0], atol=1e-3)
+
+
+def test_cosine_growth_rate_matches_linear_theory():
+    q = 4 * np.pi
+    assert cosine_growth_rate(EPS) == pytest.approx(q**2 - EPS**2 * q**4)
+    # Modes with q > 1/eps are stabilised by the gradient energy and decay.
+    assert cosine_growth_rate(EPS, mode=10) < 0
+
+
+def test_unknown_1d_ic():
+    with pytest.raises(ValueError):
+        initial_condition_1d("cross", np.zeros(1), epsilon=EPS)

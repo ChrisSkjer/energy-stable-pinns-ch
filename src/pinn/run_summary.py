@@ -11,7 +11,7 @@ from typing import Any, Mapping
 
 _RUN_SUMMARY_GROUPS: list[tuple[str, tuple[str, ...]]] = [
     ("network", ("hidden_layers", "hidden_width")),
-    ("domain", ("x_max", "y_max", "t_max", "epsilon", "ic", "ic_seed")),
+    ("domain", ("dim", "x_max", "y_max", "t_max", "epsilon", "ic", "ic_seed")),
     (
         "sampling",
         (
@@ -180,8 +180,12 @@ def format_run_summary(
         lines.append("")
 
     grouped_keys = {key for _, keys in _RUN_SUMMARY_GROUPS for key in keys}
+    # y_max is in a group even when skipped there for a 1D run, so it
+    # doesn't resurface under "other".
     for title, keys in _RUN_SUMMARY_GROUPS:
         present = [key for key in keys if key in args]
+        if args.get("dim") == 1:
+            present = [key for key in present if key != "y_max"]  # unused in 1D
         if not present:
             continue
         lines.append(title + ":")

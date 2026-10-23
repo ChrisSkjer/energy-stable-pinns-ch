@@ -51,3 +51,20 @@ def test_parse_args_rejects_grid_shape_without_grid(monkeypatch):
     monkeypatch.setattr("sys.argv", ["train", "--collocation", "sobol", "--grid-shape", "4", "4", "4"])
     with pytest.raises(SystemExit):
         parse_args()
+
+
+def test_parse_args_picks_a_default_ic_per_dim_and_rejects_the_wrong_one(monkeypatch):
+    import pytest
+
+    from src.pinn.train import parse_args
+
+    monkeypatch.setattr("sys.argv", ["train"])
+    assert parse_args().ic == "cross"
+    monkeypatch.setattr("sys.argv", ["train", "--dim", "1"])
+    assert parse_args().ic == "cosine"
+    monkeypatch.setattr("sys.argv", ["train", "--dim", "1", "--ic", "cross"])
+    with pytest.raises(SystemExit):
+        parse_args()
+    monkeypatch.setattr("sys.argv", ["train", "--dim", "1", "--collocation", "grid", "--grid-shape", "4", "4", "4"])
+    with pytest.raises(SystemExit):
+        parse_args()

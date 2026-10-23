@@ -14,7 +14,7 @@ import time
 
 import torch
 
-from src.common.initial_conditions import INITIAL_CONDITIONS
+from src.common.initial_conditions import INITIAL_CONDITIONS, INITIAL_CONDITIONS_1D
 from src.pinn.losses import (
     DEFAULT_EPSILON,
     bc_loss,
@@ -26,11 +26,20 @@ from src.pinn.layer_stats import LayerStatsLog, update_ratios, weight_snapshot
 from src.pinn.model import PINN
 from src.pinn.run_paths import checkpoints_dir_for, final_path_for, run_dir_for
 from src.pinn.collocation import COLLOCATION_STRATEGIES, RESAMPLABLE, heldout_points, make_sampler
-from src.pinn.sampling import TrainingPoints, heldout_ic_bc_points, sample_points, with_pde_at_t0
+from src.pinn.sampling import TrainingPoints, domain_bounds, heldout_ic_bc_points, sample_points, with_pde_at_t0
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train the Cahn-Hilliard PINN")
+    parser.add_argument(
+        "--dim",
+        type=int,
+        default=2,
+        choices=(1, 2),
+        help="Space dimension: 2 trains u(x, y, t) on [0, x-max] x [0, y-max], "
+        "1 trains u(x, t) on [0, x-max] (--y-max is then ignored). The network "
+        "input is (x, [y,] t); the output is (u, mu) either way.",
+    )
     parser.add_argument("--hidden-layers", type=int, default=5)
     parser.add_argument("--hidden-width", type=int, default=100)
     parser.add_argument("--epochs", type=int, default=100, help="Adam epochs before L-BFGS")
@@ -114,13 +123,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ic",
         type=str,
-        default="cross",
-        choices=sorted(INITIAL_CONDITIONS),
-        help="Initial condition (see src/common/initial_conditions.py): "
-        "'cross' (Swiss-flag cross relaxing to a circle), 'two_circles' "
-        "(coarsening, the small circle feeds the big one), 'noise' (smooth "
-        "random perturbation, spinodal decomposition). Use the same --ic for "
-        "the FEM ground truth.",
+        default=None,
+        help="Initial condition (see src/common/initial_conditions.py). "
+        f"--dim 2: {sorted(INITIAL_CONDITIONS)}, default 'cross' -- 'cross' "
+        "(Swiss-flag cross relaxing to a circle), 'two_circles' (coarsening, "
+        "the small circle feeds the big one), 'noise' (smooth random "
+        "perturbation, spinodal decomposition). "
+        f"--dim 1: {sorted(INITIAL_CONDITIONS_1D)}, default 'cosine' -- "
+        "'step' (stationary equilibrium interface), 'two_intervals', 'noise', "
+        "'cosine' (single growing mode with an analytic early-time solution). "
+        "Use the same --ic for the FEM ground truth.",
     )
     parser.add_argument(
         "--ic-seed",
@@ -137,7 +149,7 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=10000,
         help="Interior PDE points (for --collocation grid: only picks the "
-        "default --grid-shape, round(n^(1/3)) per axis)",
+        "default --grid-shape, round(n^(1/(dim+1))) per axis)",
     )
     parser.add_argument(
         "--collocation",
@@ -147,7 +159,7 @@ def parse_args() -> argparse.Namespace:
         help="Collocation point strategy (see src/pinn/collocation.py): "
         "'random' (independent uniform draws), 'sobol' (scrambled Sobol "
         "quasi-random, more evenly spread), 'grid' (cell-centred regular "
-        "(x, y, t) grid).",
+        "(x, [y,] t) grid).",
     )
     parser.add_argument(
         "--resample-every",
@@ -160,11 +172,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--grid-shape",
         type=int,
-        nargs=3,
+        nargs="+",
         default=None,
-        metavar=("NX", "NY", "NT"),
-        help="Points per axis for --collocation grid. Defaults to "
-        "round(n_collocation^(1/3)) on each axis.",
+        metavar="N",
+        help="Points per axis for --collocation grid: NX NY NT, or NX NT for "
+        "--dim 1. Defaults to round(n_collocation^(1/(dim+1))) on each axis.",
     )
     parser.add_argument(
         "--sampling-seed",
@@ -198,8 +210,16 @@ def parse_args() -> argparse.Namespace:
         "backward pass per loss term at each logged step. Stored under the "
         "checkpoint's 'layer_stats' key.",
     )
-    parser.add_argument("--n-ic", type=int, default=100, help="Side length of the IC point grid")
-    parser.add_argument("--n-bc", type=int, default=100, help="Side length of the BC point grid, per edge")
+    parser.add_argument(
+        "--n-ic", type=int, default=100, help="IC points per spatial axis (n x n in 2D, n in 1D)"
+    )
+    parser.add_argument(
+        "--n-bc",
+        type=int,
+        default=100,
+        help="BC points per axis on each wall (n x n over (space, t) per edge "
+        "in 2D, n times at each end in 1D)",
+    )
     parser.add_argument(
         "--pde-at-t0",
         type=int,
@@ -227,6 +247,13 @@ def parse_args() -> argparse.Namespace:
         parser.error(f"--resample-every needs a random strategy, not --collocation {args.collocation}")
     if args.grid_shape is not None and args.collocation != "grid":
         parser.error("--grid-shape only applies to --collocation grid")
+    if args.grid_shape is not None and len(args.grid_shape) != args.dim + 1:
+        parser.error(f"--grid-shape needs {args.dim + 1} values for --dim {args.dim}")
+    ics = INITIAL_CONDITIONS if args.dim == 2 else INITIAL_CONDITIONS_1D
+    if args.ic is None:
+        args.ic = "cross" if args.dim == 2 else "cosine"
+    if args.ic not in ics:
+        parser.error(f"--ic {args.ic!r} is not a {args.dim}D initial condition; choose from {sorted(ics)}")
     return args
 
 
@@ -259,13 +286,12 @@ def train(args: argparse.Namespace) -> None:
     print(f"run directory: {run_dir_for(run_name)}")
 
     device = torch.device(args.device)
-    lower = (0.0, 0.0, 0.0)
-    upper = (args.x_max, args.y_max, args.t_max)
+    lower, upper = domain_bounds(args.dim, args.x_max, args.y_max, args.t_max)
 
     model = PINN(
         lower_bound=lower,
         upper_bound=upper,
-        input_dim=3,
+        input_dim=len(lower),
         output_dim=2,  # u (phase field) and mu (chemical potential)
         hidden_layers=args.hidden_layers,
         hidden_width=args.hidden_width,

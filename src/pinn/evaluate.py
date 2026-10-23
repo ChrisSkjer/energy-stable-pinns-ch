@@ -16,6 +16,7 @@ import torch
 
 from src.pinn.model import PINN
 from src.pinn.run_paths import infer_run_dir
+from src.pinn.sampling import domain_bounds
 
 
 def parse_args() -> argparse.Namespace:
@@ -76,10 +77,14 @@ def load_model(checkpoint_path: str, device: torch.device | str = "cpu") -> PINN
     """
     checkpoint = torch.load(checkpoint_path, map_location=device)
     train_args = checkpoint["args"]
+    # Checkpoints from before --dim existed are all 2D.
+    lower, upper = domain_bounds(
+        train_args.get("dim", 2), train_args["x_max"], train_args["y_max"], train_args["t_max"]
+    )
     model = PINN(
-        lower_bound=(0.0, 0.0, 0.0),
-        upper_bound=(train_args["x_max"], train_args["y_max"], train_args["t_max"]),
-        input_dim=3,
+        lower_bound=lower,
+        upper_bound=upper,
+        input_dim=len(lower),
         output_dim=2,  # u (phase field) and mu (chemical potential), matching train.py
         hidden_layers=train_args["hidden_layers"],
         hidden_width=train_args["hidden_width"],
@@ -169,6 +174,43 @@ def evaluate_over_time(
     return X, Y, U, MU
 
 
+def evaluate_space_time_1d(
+    model: PINN,
+    nx: int,
+    nt: int,
+    device: torch.device | str = "cpu",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Evaluate a 1D model (input (x, t)) on a regular (nt, nx) space-time grid
+    over its whole training window.
+
+    The 1D counterpart of evaluate_over_time: the whole space-time field is
+    cheap in 1D, so there is no need to pick snapshot times first. Also
+    returns u_x (by autograd) for the gradient term of the free energy.
+
+    Returns:
+        (x (nx,), t (nt,), U, MU, U_X), the last three of shape (nt, nx) --
+        row k is the field at t[k].
+    """
+    if model.input_dim != 2:
+        raise ValueError(f"evaluate_space_time_1d needs a 1D (x, t) model, got input_dim={model.input_dim}")
+    (x_lo, t_lo), (x_hi, t_hi) = model.lower_bound.tolist(), model.upper_bound.tolist()
+    x = np.linspace(x_lo, x_hi, nx)
+    t = np.linspace(t_lo, t_hi, nt)
+    T, X = np.meshgrid(t, x, indexing="ij")
+    points = torch.as_tensor(np.stack([X.ravel(), T.ravel()], axis=1), dtype=torch.float32, device=device)
+    points.requires_grad_(True)
+
+    output = model(points)
+    u = output[:, 0:1]
+    u_x = torch.autograd.grad(u, points, grad_outputs=torch.ones_like(u))[0][:, 0]
+
+    output_np = output.detach().cpu().numpy()
+    U = output_np[:, 0].reshape(nt, nx)
+    MU = output_np[:, 1].reshape(nt, nx)
+    U_X = u_x.detach().cpu().numpy().reshape(nt, nx)
+    return x, t, U, MU, U_X
+
+
 def save_evaluation(
     path: str,
     x: np.ndarray,
@@ -193,6 +235,8 @@ if __name__ == "__main__":
     cli_args = parse_args()
 
     model = load_model(cli_args.checkpoint_path, device=cli_args.device)
+    if model.input_dim == 2:
+        raise SystemExit("this is a 1D (--dim 1) checkpoint: use python -m src.pinn.plot_1d instead")
 
     t_values = np.array(cli_args.t)
     grid_x, grid_y, grid_u, grid_mu = evaluate_over_time(

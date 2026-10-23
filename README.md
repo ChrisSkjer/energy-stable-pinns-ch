@@ -263,6 +263,27 @@ condition (`--ic cross|two_circles|noise`, default `cross`; `--ic-seed` for
 (`--pde-u-weight`/`--pde-mu-weight`/`--ic-weight`/`--bc-weight`), and optimizer settings
 (`--lr`, `--lbfgs-steps`, plus the early-stopping flags below).
 
+**1D problem (`--dim 1`).** The same script trains u(x, t) on
+[0, `--x-max`] × [0, `--t-max`]: the network takes (x, t) and still returns
+(u, μ), the residuals use u_t, u_xx and μ_xx, and the no-flux BC is
+enforced at x = 0 and x = L. 1D has its own initial conditions
+(`src/common/initial_conditions.py`, `INITIAL_CONDITIONS_1D`): `step` (a
+stationary equilibrium interface, a known-answer check), `two_intervals`,
+`noise`, and `cosine` (the default, a small cosine mode whose early-time
+solution A·e^{σt}·cos(kπx) is analytic). All other flags work unchanged;
+`--grid-shape` takes `NX NT`, and `--n-ic` / `--n-bc` count points along
+the line and per end. The runs take seconds to minutes on CPU, so 1D is
+a fast testbed for sampling and loss ideas. To plot a 1D run:
+
+```powershell
+.venv\Scripts\python.exe -m src.pinn.train --dim 1 --ic cosine --pde-at-t0 0 --run-name 1d_cosine
+.venv\Scripts\python.exe -m src.pinn.plot_1d --checkpoint results/pinn_models/1d_cosine/final.pt
+.venv\Scripts\python.exe -m src.pinn.plot_results --checkpoint results/pinn_models/1d_cosine/final.pt  # loss curves
+```
+
+There is no 1D FEM reference yet. `evaluate.py`, `diagnostics.py` and
+`analyze_run.py` are 2D-only.
+
 **Collocation sampling strategies.** Where the PDE residual is enforced is
 selectable, so sampling experiments differ by one flag
 (`src/pinn/collocation.py`):
@@ -271,7 +292,7 @@ selectable, so sampling experiments differ by one flag
 | --- | --- |
 | `random` (default) | Independent uniform draws — the original behaviour |
 | `sobol` | Scrambled Sobol quasi-random points: random-looking, but spread more evenly (lower discrepancy) |
-| `grid` | Cell-centred regular (x, y, t) grid; `--grid-shape NX NY NT`, default `round(n^(1/3))` per axis (20000 → 27³ = 19683) |
+| `grid` | Cell-centred regular (x, y, t) grid; `--grid-shape NX NY NT`, default `round(n^(1/3))` per axis (20000 → 27³ = 19683); in 1D `NX NT`, default `round(n^(1/2))` |
 
 `--resample-every K` redraws the `random`/`sobol` points every `K` Adam
 epochs (Sobol continues its sequence rather than restarting). L-BFGS always

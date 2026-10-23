@@ -28,6 +28,10 @@ def pde_residual_losses(model: nn.Module, collocation_points: torch.Tensor, epsi
     Computed together so the forward pass and the first derivatives of u
     and mu are shared between the two residuals.
 
+    Works in any number of space dimensions: the columns of
+    `collocation_points` are the spatial coordinates followed by t, so
+    (x, t) gives laplacian = u_xx and (x, y, t) gives u_xx + u_yy.
+
     Args:
         model: the PINN.
         collocation_points: (N, input_dim) interior points, requires_grad=True.
@@ -42,21 +46,37 @@ def pde_residual_losses(model: nn.Module, collocation_points: torch.Tensor, epsi
 
     grad_u = torch.autograd.grad(u, collocation_points, grad_outputs=torch.ones_like(u), create_graph=True)[0]
     grad_mu = torch.autograd.grad(mu, collocation_points, grad_outputs=torch.ones_like(mu), create_graph=True)[0]
-    u_x, u_y, u_t = grad_u[:, 0:1], grad_u[:, 1:2], grad_u[:, 2:3]
-    mu_x, mu_y = grad_mu[:, 0:1], grad_mu[:, 1:2]
+    u_t = grad_u[:, -1:]
 
-    u_xx = torch.autograd.grad(u_x, collocation_points, grad_outputs=torch.ones_like(u_x), create_graph=True)[0][:, 0:1]
-    u_yy = torch.autograd.grad(u_y, collocation_points, grad_outputs=torch.ones_like(u_y), create_graph=True)[0][:, 1:2]
-    mu_xx = torch.autograd.grad(mu_x, collocation_points, grad_outputs=torch.ones_like(mu_x), create_graph=True)[0][:, 0:1]
-    mu_yy = torch.autograd.grad(mu_y, collocation_points, grad_outputs=torch.ones_like(mu_y), create_graph=True)[0][:, 1:2]
+    lap_u = laplacian(grad_u, collocation_points)
+    lap_mu = laplacian(grad_mu, collocation_points)
 
-    residual_u = m * (mu_xx + mu_yy) - u_t
+    residual_u = m * lap_mu - u_t
 
     #f = 1/4 * (u**2 - 1)**2 dobbel well
     f_u = (u**2 - 1) * u
-    residual_mu = mu - f_u + epsilon**2 * (u_xx + u_yy)
+    residual_mu = mu - f_u + epsilon**2 * lap_u
 
     return torch.mean(residual_u**2), torch.mean(residual_mu**2)
+
+
+def laplacian(grad: torch.Tensor, points: torch.Tensor) -> torch.Tensor:
+    """Spatial laplacian, sum_i d2/dx_i^2, of a field from its gradient.
+
+    Args:
+        grad: (N, input_dim) gradient of the field w.r.t. `points`, built
+            with create_graph=True; its last column (d/dt) is ignored.
+        points: (N, input_dim) the points it was taken at.
+
+    Returns:
+        (N, 1) laplacian over the spatial columns (all but the last).
+    """
+    n_space = points.shape[1] - 1
+    second = []
+    for i in range(n_space):
+        g_i = grad[:, i:i+1]
+        second.append(torch.autograd.grad(g_i, points, grad_outputs=torch.ones_like(g_i), create_graph=True)[0][:, i:i+1])
+    return sum(second[1:], second[0])
 
 
 def pde_u_residual_loss(model: nn.Module, collocation_points: torch.Tensor, epsilon = DEFAULT_EPSILON, m = 1.0) -> torch.Tensor:
@@ -94,12 +114,15 @@ def ic_loss(
 
 
 def bc_loss(model: nn.Module, bc_points: torch.Tensor) -> torch.Tensor:
-    """Boundary-condition loss.
+    """Boundary-condition loss: no-flux, du/dn = dmu/dn = 0 on every wall.
 
     Args:
         model: the PINN.
-        bc_points: (N_bc, input_dim) points on the domain boundary
-            (e.g. for periodic or no-flux/Neumann conditions).
+        bc_points: (N_bc, input_dim) points on the walls of the spatial box,
+            in 2 * n_space equal blocks ordered (axis 0 low, axis 0 high,
+            axis 1 low, axis 1 high, ...) -- in 2D left, right, bottom, top;
+            in 1D x = 0, x = L. Block k has normal axis k // 2, as built by
+            src/pinn/sampling.py.
 
     Returns:
         Scalar MSE of the BC term.
@@ -109,20 +132,10 @@ def bc_loss(model: nn.Module, bc_points: torch.Tensor) -> torch.Tensor:
     grad_u_bc = torch.autograd.grad(u_bc, bc_points, grad_outputs=torch.ones_like(u_bc), create_graph=True)[0]
     grad_mu_bc = torch.autograd.grad(mu_bc, bc_points, grad_outputs=torch.ones_like(mu_bc), create_graph=True)[0]
 
-    n_edge = bc_points.shape[0] // 4
-    du_dn = torch.cat([
-        grad_u_bc[:n_edge, 0:1],  # left edge (x=0)
-        grad_u_bc[n_edge:2*n_edge, 0:1],  # right edge (x=1)
-        grad_u_bc[2*n_edge:3*n_edge, 1:2],  # bottom edge (y=0)
-        grad_u_bc[3*n_edge:, 1:2],  # top edge (y=1)
-    ], dim=0)
-
-    dmu_dn = torch.cat([
-        grad_mu_bc[:n_edge, 0:1],  # left edge (x=0)
-        grad_mu_bc[n_edge:2*n_edge, 0:1],   # right edge (x=1)
-        grad_mu_bc[2*n_edge:3*n_edge, 1:2],  # bottom edge (y=0)
-        grad_mu_bc[3*n_edge:, 1 :2],  # top edge (y=1)
-    ], dim=0)
+    n_walls = 2 * (bc_points.shape[1] - 1)
+    n_edge = bc_points.shape[0] // n_walls
+    du_dn = torch.cat([grad_u_bc[k*n_edge:(k+1)*n_edge, k//2:k//2+1] for k in range(n_walls)], dim=0)
+    dmu_dn = torch.cat([grad_mu_bc[k*n_edge:(k+1)*n_edge, k//2:k//2+1] for k in range(n_walls)], dim=0)
 
     return torch.mean(du_dn**2) + torch.mean(dmu_dn**2)
 

@@ -102,3 +102,23 @@ def test_heldout_points_differ_from_training_draw_and_need_grad():
     held = heldout_points(LOWER, UPPER, 200, seed=1)
     assert held.requires_grad
     assert not torch.allclose(train, held.detach())
+
+
+LOWER_1D = (0.0, 0.0)
+UPPER_1D = (2.0, 1e-3)
+
+
+@pytest.mark.parametrize("name", sorted(COLLOCATION_STRATEGIES))
+def test_1d_points_have_two_columns_inside_the_box(name):
+    pts = make_sampler(name, LOWER_1D, UPPER_1D, 400).sample()
+    assert pts.shape == (400, 2)
+    assert torch.all(pts >= torch.tensor(LOWER_1D)) and torch.all(pts <= torch.tensor(UPPER_1D))
+    assert heldout_points(LOWER_1D, UPPER_1D, 50, seed=0).shape == (50, 2)
+
+
+def test_1d_grid_shape():
+    assert default_grid_shape(20000, dim=2) == (141, 141)
+    pts = make_sampler("grid", LOWER_1D, UPPER_1D, 0, grid_shape=(4, 6)).sample()
+    assert pts.shape == (24, 2)
+    with pytest.raises(ValueError):
+        make_sampler("grid", LOWER_1D, UPPER_1D, 0, grid_shape=(4, 5, 6))
