@@ -240,11 +240,26 @@ def cosine_growth_rate(epsilon: float, m: float = 1.0, mode: int = COSINE_MODE) 
     return m * (q**2 - epsilon**2 * q**4)
 
 
+def cosine_large(x, *, epsilon: float = 0.0, seed: int = 0) -> np.ndarray:
+    """Full-amplitude cosine, u = -cos(4 pi x).
+
+    The 1D benchmark of Wight & Zhao, u0 = -cos(2 pi x) on [-1, 1], mapped to
+    [0, 1] (x' = (x + 1) / 2). Starts near the separated phases, so the
+    dynamics is interface sharpening rather than linear growth, and
+    `cosine_growth_rate` does not apply. Their periodic BC and our no-flux BC
+    give the same solution for this (even) IC. Only the IC is matched: their
+    gamma_1, gamma_2 map to epsilon = sqrt(gamma_1 / gamma_2) / 2 and
+    m = gamma_2 / 4. `epsilon` and `seed` are unused here.
+    """
+    return -np.cos(4.0 * np.pi * np.asarray(x, dtype=float))
+
+
 INITIAL_CONDITIONS_1D: dict[str, InitialCondition] = {
     "step": step,
     "two_intervals": two_intervals,
     "noise": noise_1d,
     "cosine": cosine,
+    "cosine_large": cosine_large,
 }
 
 

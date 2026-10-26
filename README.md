@@ -274,7 +274,8 @@ enforced at x = 0 and x = L. 1D has its own initial conditions
 (`src/common/initial_conditions.py`, `INITIAL_CONDITIONS_1D`): `step` (a
 stationary equilibrium interface, a known-answer check), `two_intervals`,
 `noise`, and `cosine` (the default, a small cosine mode whose early-time
-solution A·e^{σt}·cos(kπx) is analytic). All other flags work unchanged;
+solution A·e^{σt}·cos(kπx) is analytic), and `cosine_large` (−cos(4πx),
+the Wight & Zhao 1D IC mapped to [0, 1]). All other flags work unchanged;
 `--grid-shape` takes `NX NT`, and `--n-ic` / `--n-bc` count points along
 the line and per end. The runs take seconds to minutes on CPU, so 1D is
 a fast testbed for sampling and loss ideas. To plot a 1D run:

@@ -131,7 +131,8 @@ def parse_args() -> argparse.Namespace:
         "perturbation, spinodal decomposition). "
         f"--dim 1: {sorted(INITIAL_CONDITIONS_1D)}, default 'cosine' -- "
         "'step' (stationary equilibrium interface), 'two_intervals', 'noise', "
-        "'cosine' (single growing mode with an analytic early-time solution). "
+        "'cosine' (single growing mode with an analytic early-time solution), "
+        "'cosine_large' (-cos(4 pi x), the Wight & Zhao 1D IC). "
         "Use the same --ic for the FEM ground truth.",
     )
     parser.add_argument(
