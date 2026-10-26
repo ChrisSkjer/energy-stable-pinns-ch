@@ -4,6 +4,10 @@
 - frames/frame_*.png: rendered snapshots of c (_FrameWriter, needs pyvista)
 - fem_fields.npz: (x, y, t, u, mu) on the grid of mesh vertices (_FieldRecorder)
 
+With dim=1 the fields are (x, t, u, mu) at the interval's vertices
+(_FieldRecorder1D), and frames/ holds space_time_u.png and space_time_mu.png
+drawn from them at the end of the run (_plot_space_time_1d).
+
 RunOutputs bundles the three so the solver makes one call per time step.
 """
 
@@ -216,6 +220,78 @@ class _FieldRecorder:
         return path
 
 
+class _FieldRecorder1D:
+    """1D counterpart of _FieldRecorder: (t, u, mu) snapshots at the nx+1
+    vertices of create_unit_interval(nx), saved as x (nx+1,), t, and u, mu
+    (len(t), nx+1) -- the same layout as src/pinn/plot_1d.py's
+    evaluation_1d.npz. In 1D the P1 dofs are exactly the vertices, so the
+    values are just reordered by x, no interpolation needed.
+    """
+
+    def __init__(self, every: int, V0, dofs0, V1, dofs1) -> None:
+        if every < 1:
+            raise ValueError("viz_every must be at least 1")
+        self.every = every
+        dofs0 = np.asarray(dofs0[0] if isinstance(dofs0, list) else dofs0)
+        dofs1 = np.asarray(dofs1[0] if isinstance(dofs1, list) else dofs1)
+        x0 = V0.tabulate_dof_coordinates()[:, 0]
+        x1 = V1.tabulate_dof_coordinates()[:, 0]
+        order0, order1 = np.argsort(x0), np.argsort(x1)
+        np.testing.assert_allclose(x0[order0], x1[order1])
+        self.dofs0 = dofs0[order0]
+        self.dofs1 = dofs1[order1]
+        self.x = x0[order0]
+        self.times: list[float] = []
+        self.u_frames: list[np.ndarray] = []
+        self.mu_frames: list[np.ndarray] = []
+
+    def save(self, step: int, t: float, u_array: np.ndarray) -> None:
+        if step % self.every != 0:
+            return
+        self.times.append(t)
+        self.u_frames.append(u_array[self.dofs0].real.copy())
+        self.mu_frames.append(u_array[self.dofs1].real.copy())
+
+    def write(self, output_dir: str) -> Path:
+        path = Path(output_dir) / "fem_fields.npz"
+        np.savez(
+            path,
+            x=self.x,
+            t=np.array(self.times),
+            u=np.stack(self.u_frames, axis=0),
+            mu=np.stack(self.mu_frames, axis=0),
+        )
+        return path
+
+
+def _plot_space_time_1d(output_dir: str, x, t, u, mu) -> None:
+    """Save u(x, t) and mu(x, t) as images, x across and t upwards, into
+    <output_dir>/frames/ -- the 1D stand-in for the per-step PNG frames."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    frames_dir = Path(output_dir) / "frames"
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    mu_bound = max(float(np.quantile(np.abs(mu), 0.99)), 1e-12)
+    for name, field, kwargs in (
+        ("u", u, dict(cmap=_phase_colormap(), vmin=-1, vmax=1)),
+        ("mu", mu, dict(cmap="RdBu_r", vmin=-mu_bound, vmax=mu_bound)),
+    ):
+        fig, ax = plt.subplots(figsize=(6, 4))
+        image = ax.imshow(
+            field, origin="lower", aspect="auto", extent=(x[0], x[-1], t[0], t[-1]),
+            interpolation="nearest", **kwargs,
+        )
+        fig.colorbar(image, ax=ax, label=name)
+        ax.set_xlabel("x")
+        ax.set_ylabel("t")
+        ax.set_title(f"FEM {name}(x, t)")
+        fig.savefig(frames_dir / f"space_time_{name}.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+
 def check_output_dir(output_dir: str, overwrite: bool) -> None:
     """Refuse to reuse an output_dir that already has a diagnostics log,
     unless overwrite -- protects a run that took hours from being silently
@@ -239,13 +315,18 @@ class RunOutputs:
         self.output_dir = output_dir
         self.frames = None
         self.fields = None
+        self.space_time_1d = config.dim == 1 and config.visualize
         if config.visualize or config.save_fields:
             V0, dofs0 = ME.sub(0).collapse()
-        if config.visualize:
+        if config.dim == 1:
+            if config.save_fields:
+                V1, dofs1 = ME.sub(1).collapse()
+                self.fields = _FieldRecorder1D(config.viz_every, V0, dofs0, V1, dofs1)
+        elif config.visualize:
             self.frames = _FrameWriter(
                 output_dir, config.viz_every, V0, dofs0, config.show_gridpoints
             )
-        if config.save_fields:
+        if config.dim == 2 and config.save_fields:
             V1, dofs1 = ME.sub(1).collapse()
             self.fields = _FieldRecorder(
                 config.viz_every, V0, dofs0, V1, dofs1, config.nx, config.ny
@@ -268,3 +349,8 @@ class RunOutputs:
         self.diagnostics.close()
         if self.fields is not None and self.fields.times:
             self.fields.write(self.output_dir)
+            if self.space_time_1d:
+                f = self.fields
+                _plot_space_time_1d(
+                    self.output_dir, f.x, np.array(f.times), np.stack(f.u_frames), np.stack(f.mu_frames)
+                )

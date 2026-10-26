@@ -142,7 +142,11 @@ as a matching CLI flag automatically (`nx` → `--nx`, `epsilon` → `--epsilon`
 full list. `--ic {cross,two_circles,noise}` picks the initial condition
 (default `cross`; `--seed` seeds `noise`). The PINN's `--ic`/`--ic-seed`
 read from the same definitions in `src/common/initial_conditions.py`, so
-pass matching values to both when generating a ground truth. Two flags
+pass matching values to both when generating a ground truth. `--dim 1`
+solves on the unit interval instead, with the 1D ICs
+(`step`, `two_intervals`, `noise`, `cosine`); `fem_fields.npz` then holds
+`x`, `t`, `u`, `mu` at the `nx+1` vertices and `frames/` two space-time
+PNGs. `bash scripts/run_fem_1d.sh` runs all four 1D ICs. Two flags
 control where output goes, not the physics:
 
 - `--output-dir PATH` — where the run writes `cahn_hilliard_diagnostics.csv`

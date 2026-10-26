@@ -196,19 +196,39 @@ def evaluate_space_time_1d(
     (x_lo, t_lo), (x_hi, t_hi) = model.lower_bound.tolist(), model.upper_bound.tolist()
     x = np.linspace(x_lo, x_hi, nx)
     t = np.linspace(t_lo, t_hi, nt)
+    return (x, t, *evaluate_grid_1d(model, x, t, device=device))
+
+
+def evaluate_grid_1d(
+    model: PINN,
+    x: np.ndarray,
+    t: np.ndarray,
+    device: torch.device | str = "cpu",
+    chunk: int = 50_000,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Evaluate a 1D model on the tensor grid t x x of given coordinates,
+    e.g. a FEM run's own vertices and snapshot times.
+
+    Evaluated `chunk` points at a time, so a fine grid (a FEM run's 1001 x
+    201 points) does not hold one autograd graph over every point at once.
+
+    Returns:
+        (U, MU, U_X), each of shape (len(t), len(x)).
+    """
     T, X = np.meshgrid(t, x, indexing="ij")
-    points = torch.as_tensor(np.stack([X.ravel(), T.ravel()], axis=1), dtype=torch.float32, device=device)
-    points.requires_grad_(True)
-
-    output = model(points)
-    u = output[:, 0:1]
-    u_x = torch.autograd.grad(u, points, grad_outputs=torch.ones_like(u))[0][:, 0]
-
-    output_np = output.detach().cpu().numpy()
-    U = output_np[:, 0].reshape(nt, nx)
-    MU = output_np[:, 1].reshape(nt, nx)
-    U_X = u_x.detach().cpu().numpy().reshape(nt, nx)
-    return x, t, U, MU, U_X
+    all_points = np.stack([X.ravel(), T.ravel()], axis=1)
+    outputs, u_xs = [], []
+    for start in range(0, len(all_points), chunk):
+        points = torch.as_tensor(all_points[start : start + chunk], dtype=torch.float32, device=device)
+        points.requires_grad_(True)
+        output = model(points)
+        u = output[:, 0:1]
+        u_x = torch.autograd.grad(u, points, grad_outputs=torch.ones_like(u))[0][:, 0]
+        outputs.append(output.detach().cpu().numpy())
+        u_xs.append(u_x.detach().cpu().numpy())
+    output_np = np.concatenate(outputs)
+    shape = (len(t), len(x))
+    return output_np[:, 0].reshape(shape), output_np[:, 1].reshape(shape), np.concatenate(u_xs).reshape(shape)
 
 
 def save_evaluation(

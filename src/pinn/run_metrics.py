@@ -6,7 +6,8 @@ a few scalars:
 
 - physics (diagnostics.csv): does the PINN dissipate energy monotonically
   and conserve mass? (RQ1)
-- field bounds (evaluation.npz): does u leave the physical range [-1, 1]?
+- field bounds (evaluation.npz, or evaluation_1d.npz from plot_1d for a
+  --dim 1 run): does u leave the physical range [-1, 1]?
 - accuracy vs. FEM (with --fem-fields / --fem-diagnostics): relative L2 and
   max-norm errors of u and mu, error in the phase fraction, error in the
   free-energy curve (RQ3)
@@ -82,7 +83,10 @@ def fem_field_metrics(pinn: dict, fem: dict) -> dict:
     Returns per-time lists plus summaries:
         t, rel_l2_u, rel_l2_mu, linf_u, phase_fraction_error -- per time;
         rel_l2_u_mean/max, rel_l2_mu_mean/max, linf_u_max,
-        phase_fraction_error_max -- summaries. phase_fraction_error is
+        phase_fraction_error_max -- summaries; rel_l2_u_spacetime,
+        rel_l2_mu_spacetime -- one relative L2 error over every compared
+        snapshot at once (the whole (x, t) field for a 1D run).
+    Works for 2D (x, y grids) and 1D (x vectors) evaluations alike. phase_fraction_error is
         |area(u > 0)_PINN - area(u > 0)_FEM| as a fraction of the domain: it
         tracks whether the two agree on how much of each phase there is,
         independent of interface sharpness.
@@ -92,8 +96,10 @@ def fem_field_metrics(pinn: dict, fem: dict) -> dict:
     if pinn["x"].shape != fem["x"].shape or not np.allclose(pinn["x"], fem["x"]):
         raise ValueError("PINN evaluation and FEM fields are on different grids -- see analyze_run.py --fem-fields")
     rows = {"t": [], "rel_l2_u": [], "rel_l2_mu": [], "linf_u": [], "phase_fraction_error": []}
+    matched = []
     for idx, t_val in enumerate(pinn["t"]):
         k = int(np.argmin(np.abs(fem["t"] - t_val)))
+        matched.append(k)
         if abs(fem["t"][k] - t_val) > 1e-9:
             warnings.warn(f"PINN t={t_val:g}: using closest FEM snapshot t={fem['t'][k]:g}")
         u_p, u_f = pinn["u"][idx], fem["u"][k]
@@ -111,6 +117,11 @@ def fem_field_metrics(pinn: dict, fem: dict) -> dict:
         if values.size:
             out[f"{name}_mean"] = float(values.mean())
             out[f"{name}_max"] = float(values.max())
+    fem_u, fem_mu = fem["u"][matched], fem["mu"][matched]
+    out["rel_l2_u_spacetime"] = relative_l2_error(pinn["u"], fem_u)
+    has_mu = np.array([np.any(m) for m in fem_mu])
+    if has_mu.any():
+        out["rel_l2_mu_spacetime"] = relative_l2_error(pinn["mu"][has_mu], fem_mu[has_mu])
     out["linf_u_max"] = max(rows["linf_u"])
     out["phase_fraction_error_max"] = max(rows["phase_fraction_error"])
     return out
@@ -194,6 +205,8 @@ def compute_run_metrics(
         metrics["physics"] = physics_metrics(t_p, e_p, m_p)
 
     eval_path = os.path.join(run_dir, "evaluation.npz")
+    if not os.path.exists(eval_path):
+        eval_path = os.path.join(run_dir, "evaluation_1d.npz")
     pinn = None
     if os.path.exists(eval_path):
         with np.load(eval_path) as f:

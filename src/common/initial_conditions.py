@@ -187,9 +187,12 @@ _INTERVALS = ((0.35, 0.10), (0.66, 0.06))  # (centre, half-width)
 def two_intervals(x, *, epsilon: float, seed: int = 0) -> np.ndarray:
     """Two u = +1 intervals of different width on a u = -1 background.
 
-    The 1D analogue of two_circles, but without curvature the interfaces only
-    relax their profile and drift exponentially slowly towards each other.
-    `seed` is unused.
+    The 1D analogue of two_circles. There is no curvature, but the gap between
+    the intervals (0.15, ~2 interface widths at eps=0.05) is small enough for
+    their tanh tails to interact: in the FEM run (nx=1000, dt=1e-5) they
+    merge into one interval by t ~ 0.02 and the energy halves by t = 0.1.
+    Only well-separated intervals coarsen exponentially slowly. `seed` is
+    unused.
     """
     x = np.asarray(x, dtype=float)
     sdf = np.minimum.reduce([np.abs(x - c) - half_w for c, half_w in _INTERVALS])

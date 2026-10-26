@@ -26,15 +26,17 @@ from mpi4py import MPI
 from dolfinx import default_real_type
 from dolfinx.fem import Constant, Function, assemble_scalar, form, functionspace
 from dolfinx.fem.petsc import NonlinearProblem
-from dolfinx.mesh import CellType, create_unit_square
+from dolfinx.mesh import CellType, create_unit_interval, create_unit_square
 
-from src.common.initial_conditions import initial_condition
+from src.common.initial_conditions import initial_condition, initial_condition_1d
 from src.fem.config import CahnHilliardConfig, check_config, config_from_args, newton_options, parse_args
 from src.fem.output import RunOutputs, check_output_dir
 
 
 def build_mesh(config: CahnHilliardConfig):
     """Create the DOLFINx mesh for the given configuration."""
+    if config.dim == 1:
+        return create_unit_interval(MPI.COMM_WORLD, config.nx)
     return create_unit_square(MPI.COMM_WORLD, config.nx, config.ny, CellType.triangle)
 
 
@@ -78,11 +80,16 @@ def solve(
     # Shared with the PINN (src/pinn/sampling.py), so both start from the same
     # field. The tanh-profile ICs use the solver's own epsilon, so the
     # interface starts at its equilibrium width.
-    u.sub(0).interpolate(
-        lambda x: initial_condition(
-            config.ic, x[0], x[1], epsilon=config.epsilon, seed=config.seed
+    if config.dim == 1:
+        u.sub(0).interpolate(
+            lambda x: initial_condition_1d(config.ic, x[0], epsilon=config.epsilon, seed=config.seed)
         )
-    )
+    else:
+        u.sub(0).interpolate(
+            lambda x: initial_condition(
+                config.ic, x[0], x[1], epsilon=config.epsilon, seed=config.seed
+            )
+        )
     u.x.scatter_forward()
 
     c = ufl.variable(c)

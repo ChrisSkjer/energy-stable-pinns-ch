@@ -7,7 +7,14 @@ import numpy as np
 import pytest
 import torch
 
-from src.pinn.evaluate import evaluate_on_grid, evaluate_over_time, load_model, save_evaluation
+from src.pinn.evaluate import (
+    evaluate_grid_1d,
+    evaluate_on_grid,
+    evaluate_over_time,
+    evaluate_space_time_1d,
+    load_model,
+    save_evaluation,
+)
 from src.pinn.model import PINN
 
 
@@ -80,3 +87,14 @@ def test_save_evaluation_round_trip(tmp_path):
         np.testing.assert_array_equal(data["u"], U)
         np.testing.assert_array_equal(data["mu"], MU)
         np.testing.assert_array_equal(data["x"], X)
+
+
+def test_evaluate_grid_1d_chunks_match_one_pass():
+    torch.manual_seed(0)
+    model = PINN((0.0, 0.0), (1.0, 0.1), input_dim=2, output_dim=2, hidden_layers=2, hidden_width=8)
+    x, t, u, mu, u_x = evaluate_space_time_1d(model, 13, 7)
+    u_c, mu_c, u_x_c = evaluate_grid_1d(model, x, t, chunk=10)
+    np.testing.assert_allclose(u_c, u, atol=1e-6)
+    np.testing.assert_allclose(mu_c, mu, atol=1e-6)
+    np.testing.assert_allclose(u_x_c, u_x, atol=1e-5)
+    assert u_c.shape == (7, 13)

@@ -10,7 +10,7 @@ import warnings
 import numpy as np
 import pytest
 
-from src.common.initial_conditions import initial_condition
+from src.common.initial_conditions import cosine_growth_rate, initial_condition, initial_condition_1d
 
 
 def test_import():
@@ -52,6 +52,29 @@ def test_first_steps_are_backward_euler(tmp_path):
     np.testing.assert_allclose(started["u"][-1], implicit["u"][-1], atol=1e-10)
     crank_nicolson = _solve(tmp_path / "c", startup_steps=0)
     assert not np.allclose(started["u"][-1], crank_nicolson["u"][-1], atol=1e-6)
+
+
+def test_1d_saved_fields_are_the_nodal_values(tmp_path):
+    fields = _solve(tmp_path, dim=1, nx=200, ic="two_intervals")
+    np.testing.assert_allclose(fields["x"], np.linspace(0, 1, 201))
+    assert fields["u"].shape == fields["mu"].shape == (2, 201)
+    ic = initial_condition_1d("two_intervals", fields["x"], epsilon=0.05)
+    np.testing.assert_allclose(fields["u"][0], ic, atol=1e-12)
+
+
+def test_1d_cosine_grows_at_the_linear_rate(tmp_path):
+    # A = 0.01 stays in the linear regime: u(x, t) = u0(x) exp(sigma t).
+    t_final = 5e-3
+    fields = _solve(tmp_path, dim=1, nx=400, ic="cosine", dt=1e-5, t_final=t_final, viz_every=500)
+    exact = fields["u"][0] * np.exp(cosine_growth_rate(0.05) * t_final)
+    np.testing.assert_allclose(fields["t"][-1], t_final)
+    assert np.linalg.norm(fields["u"][-1] - exact) / np.linalg.norm(exact) < 1e-2
+
+
+def test_1d_writes_space_time_frames(tmp_path):
+    _solve(tmp_path, dim=1, nx=50, ic="step", visualize=True)
+    assert (tmp_path / "frames" / "space_time_u.png").exists()
+    assert (tmp_path / "frames" / "space_time_mu.png").exists()
 
 
 def _render_frame(tmp_path, field):

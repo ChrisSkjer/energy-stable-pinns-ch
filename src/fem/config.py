@@ -18,7 +18,7 @@ from petsc4py import PETSc
 
 from dolfinx import default_real_type
 
-from src.common.initial_conditions import INITIAL_CONDITIONS
+from src.common.initial_conditions import INITIAL_CONDITIONS, INITIAL_CONDITIONS_1D
 
 
 @dataclass
@@ -53,8 +53,14 @@ class CahnHilliardConfig:
 
     The first `startup_steps` steps are backward Euler (theta=1), the rest use
     `theta`; see the comment at the time loop in cahn_hilliard.solve for why.
+
+    dim=1 solves u(x, t) on the unit interval with nx cells (ny is ignored)
+    and the 1D initial conditions (INITIAL_CONDITIONS_1D), as the 1D PINN
+    (train.py --dim 1) does. Frames are then two space-time PNGs written at
+    the end of the run rather than one PNG per step.
     """
 
+    dim: int = 2  # space dimension: 2 = unit square, 1 = unit interval
     nx: int = 100
     ny: int = 100
     epsilon: float = 0.05  # interface-width parameter; needs nx >~ 4/epsilon
@@ -81,14 +87,19 @@ def check_config(config: CahnHilliardConfig) -> None:
     Warnings use stacklevel=3 so they point at the caller of solve(), which
     is where this is called from.
     """
-    if config.ic not in INITIAL_CONDITIONS:
+    if config.dim not in (1, 2):
+        raise ValueError(f"dim must be 1 or 2, got {config.dim}")
+    ics = INITIAL_CONDITIONS if config.dim == 2 else INITIAL_CONDITIONS_1D
+    if config.ic not in ics:
         raise ValueError(
-            f"unknown initial condition {config.ic!r}; choose from {sorted(INITIAL_CONDITIONS)}"
+            f"unknown {config.dim}D initial condition {config.ic!r}; choose from {sorted(ics)}"
         )
+    if config.dim == 1 and config.visualize and not config.save_fields:
+        raise ValueError("dim=1 draws its frames from the saved fields; pass --save-fields too")
 
     # interface needs several elements across it (~epsilon/4) or the Newton
     # solver tends to diverge on the rough random initial condition
-    h = 1.0 / max(config.nx, config.ny)
+    h = 1.0 / (config.nx if config.dim == 1 else max(config.nx, config.ny))
     if h > config.epsilon / 4:
         warnings.warn(
             f"mesh element size (~{h:.4g}) is coarse relative to epsilon "

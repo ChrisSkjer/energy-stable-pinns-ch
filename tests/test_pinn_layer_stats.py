@@ -137,6 +137,19 @@ def test_fem_field_metrics():
     assert m["rel_l2_mu_max"] == 0.0
 
 
+def test_fem_field_metrics_1d_and_spacetime():
+    # 1D layout (x vector, u (nt, nx)); PINN at every other FEM snapshot.
+    x = np.linspace(0, 1, 11)
+    t_f = np.array([0.0, 0.5, 1.0])
+    u_f = np.stack([np.cos(np.pi * x) * (1 + k) for k in range(3)])
+    mu_f = np.stack([np.zeros_like(x), np.sin(np.pi * x), 2 * np.sin(np.pi * x)])
+    fem = {"x": x, "t": t_f, "u": u_f, "mu": mu_f}
+    pinn = {"x": x, "t": t_f[[0, 2]], "u": 1.1 * u_f[[0, 2]], "mu": mu_f[[0, 2]]}
+    m = fem_field_metrics(pinn, fem)
+    assert m["rel_l2_u_spacetime"] == pytest.approx(0.1)
+    assert m["rel_l2_mu_spacetime"] == 0.0  # the all-zero mu(0) row is left out
+
+
 def test_fem_energy_metrics_interpolate():
     t_f = np.linspace(0, 2, 21)
     e_f = 1.0 - 0.1 * t_f

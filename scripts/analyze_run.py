@@ -9,6 +9,14 @@ The one exception is --fem-fields: the comparison needs the PINN evaluated on
 the FEM run's own (x, y) grid, so evaluate's --nx/--ny are read from that
 fem_fields.npz instead of left at evaluate's defaults.
 
+A --dim 1 run (read from the checkpoint) goes through src.pinn.plot_1d
+instead of evaluate + diagnostics + the field plots: it evaluates on the
+FEM run's own vertices and times when --fem-fields (a src.fem.cahn_hilliard
+--dim 1 run) is given, and writes the PINN-vs-FEM space-time comparison and
+relative L2 error plots. plot_results then adds the loss curves and
+run_metrics the scalar metrics, as in 2D. --t, --profile-x/-y and
+--field-plots are 2D-only and ignored.
+
 Usage:
     python scripts/analyze_run.py demo_run
     python scripts/analyze_run.py eps0.01_h64x4 --device cuda --t 0.0 0.01 0.05
@@ -17,6 +25,7 @@ Usage:
     python scripts/analyze_run.py demo_run --format png
     python scripts/analyze_run.py demo_run --field-plots
     python scripts/analyze_run.py demo_run --fem-fields results/eps0.05_nx100_dte-4_two_cricles/fem_fields.npz --profile-y 0.5
+    python scripts/analyze_run.py <1d run> --fem-fields results/eps0.05_nx1000_dt1e-5_t0.1_dim1_cosine/fem_fields.npz
 """
 
 import argparse
@@ -25,6 +34,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import torch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -92,6 +102,37 @@ def run_step(label: str, module: str, module_args: list[str]) -> None:
     subprocess.run([sys.executable, "-m", module, *module_args], cwd=REPO_ROOT, check=True)
 
 
+def analyze_1d(args: argparse.Namespace, checkpoint: str) -> None:
+    """plot_1d (fields, FEM comparison, diagnostics.csv) -> plot_results
+    (loss curves) -> run_metrics, for a --dim 1 run."""
+    plot_1d_args = ["--checkpoint", checkpoint, "--device", args.device, "--format", args.format]
+    if args.fem_fields:
+        if not Path(args.fem_fields).exists():
+            sys.exit(f"No FEM fields file at {args.fem_fields}.")
+        plot_1d_args += ["--fem-fields", args.fem_fields]
+        if args.fem_diagnostics is None:
+            candidate = Path(args.fem_fields).with_name("cahn_hilliard_diagnostics.csv")
+            if candidate.exists():
+                args.fem_diagnostics = str(candidate)
+    if args.fem_diagnostics:
+        plot_1d_args += ["--fem-diagnostics", args.fem_diagnostics]
+    run_step("plot_1d", "src.pinn.plot_1d", plot_1d_args)
+    # plot_results redraws energy_dissipation/mass_conservation from the
+    # diagnostics.csv plot_1d just wrote, so it needs the FEM curves too
+    results_args = ["--checkpoint", checkpoint, "--format", args.format]
+    if args.fem_diagnostics:
+        results_args += ["--fem-diagnostics", args.fem_diagnostics]
+    run_step("plot_results", "src.pinn.plot_results", results_args)
+
+    metrics_args = ["--run-dir", str(Path(checkpoint).parent)]
+    if args.fem_fields:
+        metrics_args += ["--fem-fields", args.fem_fields]
+    if args.fem_diagnostics:
+        metrics_args += ["--fem-diagnostics", args.fem_diagnostics]
+    run_step("metrics", "src.pinn.run_metrics", metrics_args)
+    print(f"\nDone -- plots in {Path(checkpoint).parent / 'plots'}")
+
+
 def main() -> None:
     args = parse_args()
 
@@ -101,6 +142,10 @@ def main() -> None:
             f"No checkpoint at {checkpoint}. Train the run first, or -- if it was "
             f"trained on Colab -- pull it down with scripts/pull_colab_model.py."
         )
+    train_args = torch.load(REPO_ROOT / checkpoint, map_location="cpu")["args"]
+    if train_args.get("dim", 2) == 1:
+        analyze_1d(args, checkpoint)
+        return
 
     evaluate_args = ["--checkpoint-path", checkpoint, "--device", args.device, "--t", *[str(t) for t in args.t]]
     if args.fem_fields:
