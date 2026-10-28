@@ -42,11 +42,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--hidden-layers", type=int, default=5)
     parser.add_argument("--hidden-width", type=int, default=100)
-    parser.add_argument("--epochs", type=int, default=100, help="Adam epochs before L-BFGS")
+    parser.add_argument("--epochs", type=int, default=1000, help="Adam epochs before L-BFGS")
     parser.add_argument(
         "--lbfgs-steps",
         type=int,
-        default=70,
+        default=100,
         help="L-BFGS refinement steps. Each one is a .step(closure) call "
         "running up to 20 inner iterations, so this is an upper bound of "
         "~20x that many closure evaluations -- see --lbfgs-patience.",
@@ -108,10 +108,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--pde-mu-weight",
         type=float,
-        default=100.0,
+        default=3000.0,
         help="Weight on the mu-equation PDE residual, mu - f'(u) + eps^2*laplacian(u)",
     )
-    parser.add_argument("--ic-weight", type=float, default=100, help="Weight on the initial-condition loss term")
+    parser.add_argument("--ic-weight", type=float, default=3000, help="Weight on the initial-condition loss term")
     parser.add_argument("--bc-weight", type=float, default=10, help="Weight on the boundary-condition loss term")
     parser.add_argument(
         "--epsilon",
@@ -144,11 +144,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--x-max", type=float, default=1.0, help="Domain upper bound in x (lower is 0)")
     parser.add_argument("--y-max", type=float, default=1.0, help="Domain upper bound in y (lower is 0)")
-    parser.add_argument("--t-max", type=float, default=5e-3, help="Domain upper bound in t (lower is 0)")
+    parser.add_argument("--t-max", type=float, default=0.01, help="Domain upper bound in t (lower is 0)")
     parser.add_argument(
         "--n-collocation",
         type=int,
-        default=10000,
+        default=20000,
         help="Interior PDE points (for --collocation grid: only picks the "
         "default --grid-shape, round(n^(1/(dim+1))) per axis)",
     )
@@ -189,11 +189,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--heldout-every",
         type=int,
-        default=0,
+        default=25,
         help="Log the unweighted PDE residuals, IC loss and BC loss on fixed "
         "sets of fresh uniform random points (never trained on) every this "
         "many Adam epochs and L-BFGS steps. "
-        "0 = off. Stored under the checkpoint's 'heldout' key.",
+        "Stored under the checkpoint's 'heldout' key. See --no-heldout.",
+    )
+    parser.add_argument(
+        "--no-heldout",
+        action="store_true",
+        help="Turn the held-out logging off (same as --heldout-every 0).",
     )
     parser.add_argument("--heldout-n", type=int, default=20000, help="Number of held-out points")
     parser.add_argument("--heldout-n-ic", type=int, default=10000, help="Number of held-out IC points on t=0")
@@ -224,14 +229,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--pde-at-t0",
         type=int,
-        default=2000,
-        help="Also enforce the PDE residual at this many t=0 points",
+        default=0,
+        help="Also enforce the PDE residual at this many t=0 points (0 = none; "
+        "extra t=0 points tend to spoil the IC fit)",
     )
     parser.add_argument(
         "--device",
         type=str,
-        default="cpu",
-        help="'cpu' locally, 'cuda' on Colab.",
+        default="cuda" if torch.cuda.is_available() else "cpu",
+        help="Defaults to 'cuda' when a GPU is available (Colab), else 'cpu'.",
     )
     parser.add_argument("--checkpoint-every", type=int, default=500, help="Epochs between checkpoints")
     parser.add_argument("--log-every", type=int, default=100, help="Epochs between progress prints")
@@ -244,6 +250,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--smoke-test", action="store_true", help="Run a handful of iterations only")
     args = parser.parse_args()
+    if args.no_heldout:
+        args.heldout_every = 0
     if args.resample_every and args.collocation not in RESAMPLABLE:
         parser.error(f"--resample-every needs a random strategy, not --collocation {args.collocation}")
     if args.grid_shape is not None and args.collocation != "grid":
