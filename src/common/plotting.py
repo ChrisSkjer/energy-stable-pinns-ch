@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
+from cycler import cycler
 
 from src.common.metrics import relative_l2_error
 
@@ -21,6 +22,18 @@ from src.common.metrics import relative_l2_error
 # epoch, then one per L-BFGS closure call -- line-search trial points
 # included, which is why the L-BFGS part of a loss curve can spike.
 STEP_LABEL = "step (Adam epochs, then L-BFGS loss evaluations)"
+
+# Colour-blind-safe line colours, from Okabe & Ito's palette. The reader is
+# red-green colour blind and also mixes up blue/purple and grey/pink, so
+# there is no green, red, purple or pink: the colours differ along the
+# blue <-> orange axis or clearly in lightness. Set as the default cycle on
+# import, so "C0".."C4" and uncoloured lines all use it. With more than two
+# series, also vary the marker/linestyle (LINE_MARKERS, LINE_STYLES) so
+# colour is never the only cue.
+LINE_COLORS = ["#0072B2", "#E69F00", "#56B4E9", "#994F00", "#000000"]  # dark blue, orange, sky blue, brown, black
+LINE_MARKERS = ["o", "s", "^", "D", "v"]
+LINE_STYLES = ["-", "--", "-.", ":", (0, (5, 1, 1, 1))]
+plt.rcParams["axes.prop_cycle"] = cycler(color=LINE_COLORS)
 
 
 def phase_colormap():
@@ -487,7 +500,7 @@ def plot_mass_conservation(
 
 
 # Loss-term colours, matching plot_heldout_residual/plot_heldout_ic_bc.
-_TERM_COLORS = {"pde": "C0", "pde_u": "C0", "pde_mu": "C1", "ic": "C2", "bc": "C3", "energy": "C4", "total": "black"}
+_TERM_COLORS = {"pde": "C0", "pde_u": "C0", "pde_mu": "C1", "ic": "C2", "bc": "C3", "energy": "0.55", "total": "black"}
 _TERM_ORDER = ("pde", "pde_u", "pde_mu", "ic", "bc", "energy", "total")
 
 

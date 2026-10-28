@@ -5,11 +5,14 @@ Run from the repo root:
     .venv\\Scripts\\python.exe scripts/plot_sampling_comparison.py
 Writes sampling_l2_error.pdf to results/pinn_models/_sampling_heldout/.
 """
+import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import src.common.plotting  # noqa: E402,F401  (sets the colour-blind-safe "C0".."C4")
 
 MODELS = Path("results/pinn_models")
 OUT = MODELS / "_sampling_heldout"
