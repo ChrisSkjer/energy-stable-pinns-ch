@@ -68,3 +68,24 @@ def test_parse_args_picks_a_default_ic_per_dim_and_rejects_the_wrong_one(monkeyp
     monkeypatch.setattr("sys.argv", ["train", "--dim", "1", "--collocation", "grid", "--grid-shape", "4", "4", "4"])
     with pytest.raises(SystemExit):
         parse_args()
+
+
+def test_parse_args_rejects_lbfgs_grid_shape_without_grid_and_lbfgs_points(monkeypatch):
+    import pytest
+
+    from src.pinn.train import parse_args
+
+    monkeypatch.setattr("sys.argv", ["train", "--collocation", "grid", "--lbfgs-grid-shape", "4", "4", "4"])
+    with pytest.raises(SystemExit):
+        parse_args()
+    monkeypatch.setattr(
+        "sys.argv",
+        ["train", "--collocation", "sobol", "--lbfgs-n-collocation", "64", "--lbfgs-grid-shape", "4", "4", "4"],
+    )
+    with pytest.raises(SystemExit):
+        parse_args()
+    monkeypatch.setattr(
+        "sys.argv",
+        ["train", "--collocation", "grid", "--lbfgs-n-collocation", "64", "--lbfgs-grid-shape", "4", "4", "4"],
+    )
+    assert parse_args().lbfgs_grid_shape == [4, 4, 4]

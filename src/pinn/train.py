@@ -182,8 +182,28 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="Redraw the interior collocation points every this many Adam "
-        "epochs (random/sobol only; 0 = never). L-BFGS always keeps the "
-        "last set fixed: its line search needs a deterministic loss.",
+        "epochs (random/sobol only; 0 = never). L-BFGS always keeps one "
+        "set fixed (the last one, or --lbfgs-n-collocation's): its line "
+        "search needs a deterministic loss.",
+    )
+    parser.add_argument(
+        "--lbfgs-n-collocation",
+        type=int,
+        default=0,
+        help="Switch to a fresh set of this many interior PDE points (same "
+        "--collocation strategy) for the L-BFGS phase, e.g. a denser set than "
+        "Adam used. 0 = keep Adam's last set. For --collocation grid this only "
+        "picks the default --lbfgs-grid-shape.",
+    )
+    parser.add_argument(
+        "--lbfgs-grid-shape",
+        type=int,
+        nargs="+",
+        default=None,
+        metavar="N",
+        help="Points per axis of the L-BFGS grid for --collocation grid with "
+        "--lbfgs-n-collocation: NX NY NT, or NX NT for --dim 1. Defaults to "
+        "round(lbfgs_n_collocation^(1/(dim+1))) on each axis.",
     )
     parser.add_argument(
         "--grid-shape",
@@ -273,6 +293,11 @@ def parse_args() -> argparse.Namespace:
         parser.error("--grid-shape only applies to --collocation grid")
     if args.grid_shape is not None and len(args.grid_shape) != args.dim + 1:
         parser.error(f"--grid-shape needs {args.dim + 1} values for --dim {args.dim}")
+    if args.lbfgs_grid_shape is not None:
+        if args.collocation != "grid" or not args.lbfgs_n_collocation:
+            parser.error("--lbfgs-grid-shape only applies to --collocation grid with --lbfgs-n-collocation")
+        if len(args.lbfgs_grid_shape) != args.dim + 1:
+            parser.error(f"--lbfgs-grid-shape needs {args.dim + 1} values for --dim {args.dim}")
     ics = INITIAL_CONDITIONS if args.dim == 2 else INITIAL_CONDITIONS_1D
     if args.ic is None:
         args.ic = "cross" if args.dim == 2 else "cosine"
@@ -523,6 +548,21 @@ def train(args: argparse.Namespace) -> None:
     # --adam-patience can end Adam before --epochs, so history alone can't
     # tell where L-BFGS took over; checkpoints carry it from here on.
     adam_steps = len(history.get("total", []))
+
+    if args.lbfgs_n_collocation:
+        # Fresh points, not more draws from Adam's sampler: its own seed
+        # (+1/+2 are the held-out sets) so they don't repeat Adam's first set.
+        lbfgs_sampler = make_sampler(
+            args.collocation,
+            lower,
+            upper,
+            200 if args.smoke_test else args.lbfgs_n_collocation,
+            seed=args.sampling_seed + 3,
+            grid_shape=args.lbfgs_grid_shape,
+            device=device,
+        )
+        points.collocation = with_pde_at_t0(lbfgs_sampler.sample(), points.t0_points)
+        print(f"[lbfgs] collocation: {args.collocation}, {points.collocation.shape[0]} points")
 
     lbfgs_steps = 2 if args.smoke_test else args.lbfgs_steps
     lbfgs = torch.optim.LBFGS(model.parameters(), lr=1.0, max_iter=20, line_search_fn="strong_wolfe")
