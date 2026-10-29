@@ -44,6 +44,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hidden-width", type=int, default=100)
     parser.add_argument("--epochs", type=int, default=1000, help="Adam epochs before L-BFGS")
     parser.add_argument(
+        "--ic-pretrain-epochs",
+        type=int,
+        default=0,
+        help="Adam epochs on the IC loss alone before the main training, to "
+        "precondition the network on the initial condition (0 = off, e.g. "
+        "500 to turn it on). Uses "
+        "its own Adam optimizer at --lr; not part of `history`, logged under "
+        "the checkpoint's 'ic_pretrain' key.",
+    )
+    parser.add_argument(
+        "--ic-pretrain-bc",
+        action="store_true",
+        help="Also include the BC loss in the --ic-pretrain-epochs phase.",
+    )
+    parser.add_argument(
         "--lbfgs-steps",
         type=int,
         default=100,
@@ -402,16 +417,42 @@ def train(args: argparse.Namespace) -> None:
     layer_stats = LayerStatsLog(model) if args.layer_stats_every else None
     # Wall-clock seconds per optimizer phase (including logging/checkpoint
     # overhead), for comparing training cost against FEM.
-    timing = {"adam_seconds": 0.0, "lbfgs_seconds": 0.0}
+    timing = {"ic_pretrain_seconds": 0.0, "adam_seconds": 0.0, "lbfgs_seconds": 0.0}
+    # Kept out of `history` so its indices (and adam_steps) still mean the
+    # main Adam + L-BFGS phases only.
+    ic_pretrain: dict[str, list[float]] = {}
 
     def checkpoint_extras() -> dict:
         extras = {"timing": dict(timing)}
+        if ic_pretrain:
+            extras["ic_pretrain"] = ic_pretrain
         if layer_stats is not None:
             extras["layer_stats"] = layer_stats.as_dict()
         return extras
 
     def activation_points() -> torch.Tensor:
         return points.collocation[:5000]
+
+    # IC-only (optionally + BC) warm-up: fit u(x, 0) before the PDE terms
+    # start pulling on the network. A fresh Adam so its moment estimates
+    # don't carry over into the main phase.
+    pretrain_epochs = min(3, args.ic_pretrain_epochs) if args.smoke_test else args.ic_pretrain_epochs
+    if pretrain_epochs:
+        pretrain_optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+        pretrain_start = time.perf_counter()
+        for epoch in range(pretrain_epochs):
+            pretrain_optimizer.zero_grad()
+            losses = {"ic": args.ic_weight * ic_loss(model, points.ic_points, points.ic_values)}
+            if args.ic_pretrain_bc:
+                losses["bc"] = args.bc_weight * bc_loss(model, points.bc_points)
+            losses["total"] = sum(losses.values())
+            losses["total"].backward()
+            pretrain_optimizer.step()
+            for name, value in losses.items():
+                ic_pretrain.setdefault(name, []).append(value.item())
+            if epoch % args.log_every == 0 or epoch == pretrain_epochs - 1:
+                print(f"[ic-pretrain] epoch {epoch:5d}/{pretrain_epochs} {format_losses(losses)}")
+        timing["ic_pretrain_seconds"] = time.perf_counter() - pretrain_start
 
     best_adam_total: float | None = None
     best_adam_state: dict[str, torch.Tensor] | None = None
