@@ -182,9 +182,20 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="Redraw the interior collocation points every this many Adam "
-        "epochs (random/sobol only; 0 = never). L-BFGS always keeps one "
-        "set fixed (the last one, or --lbfgs-n-collocation's): its line "
-        "search needs a deterministic loss.",
+        "epochs (random/sobol only; 0 = never). L-BFGS keeps the last set "
+        "(or --lbfgs-n-collocation's) unless --lbfgs-resample-every is set.",
+    )
+    parser.add_argument(
+        "--lbfgs-resample-every",
+        type=int,
+        default=0,
+        help="Redraw the interior collocation points every this many L-BFGS "
+        "steps (random/sobol only; 0 = never), from --lbfgs-n-collocation's "
+        "sampler if set, else Adam's. Only between .step() calls -- each one "
+        "runs up to 20 iterations on one fixed set, as its line search needs "
+        "a deterministic loss. Each redraw also restarts L-BFGS (fresh "
+        "curvature history) and its early-stopping count, since curvature "
+        "pairs and losses from different point sets don't mix.",
     )
     parser.add_argument(
         "--lbfgs-n-collocation",
@@ -289,6 +300,8 @@ def parse_args() -> argparse.Namespace:
         args.heldout_every = 0
     if args.resample_every and args.collocation not in RESAMPLABLE:
         parser.error(f"--resample-every needs a random strategy, not --collocation {args.collocation}")
+    if args.lbfgs_resample_every and args.collocation not in RESAMPLABLE:
+        parser.error(f"--lbfgs-resample-every needs a random strategy, not --collocation {args.collocation}")
     if args.grid_shape is not None and args.collocation != "grid":
         parser.error("--grid-shape only applies to --collocation grid")
     if args.grid_shape is not None and len(args.grid_shape) != args.dim + 1:
@@ -446,11 +459,16 @@ def train(args: argparse.Namespace) -> None:
     # Kept out of `history` so its indices (and adam_steps) still mean the
     # main Adam + L-BFGS phases only.
     ic_pretrain: dict[str, list[float]] = {}
+    # History indices where L-BFGS switched to a fresh collocation set
+    # (--lbfgs-resample-every); the loss jumps there.
+    lbfgs_resample_steps: list[int] = []
 
     def checkpoint_extras() -> dict:
         extras = {"timing": dict(timing)}
         if ic_pretrain:
             extras["ic_pretrain"] = ic_pretrain
+        if lbfgs_resample_steps:
+            extras["lbfgs_resample_steps"] = lbfgs_resample_steps
         if layer_stats is not None:
             extras["layer_stats"] = layer_stats.as_dict()
         return extras
@@ -563,9 +581,14 @@ def train(args: argparse.Namespace) -> None:
         )
         points.collocation = with_pde_at_t0(lbfgs_sampler.sample(), points.t0_points)
         print(f"[lbfgs] collocation: {args.collocation}, {points.collocation.shape[0]} points")
+    else:
+        lbfgs_sampler = sampler
+
+    def make_lbfgs() -> torch.optim.LBFGS:
+        return torch.optim.LBFGS(model.parameters(), lr=1.0, max_iter=20, line_search_fn="strong_wolfe")
 
     lbfgs_steps = 2 if args.smoke_test else args.lbfgs_steps
-    lbfgs = torch.optim.LBFGS(model.parameters(), lr=1.0, max_iter=20, line_search_fn="strong_wolfe")
+    lbfgs = make_lbfgs()
     last_losses: dict[str, torch.Tensor] = {}
 
     def closure() -> torch.Tensor:
@@ -581,6 +604,14 @@ def train(args: argparse.Namespace) -> None:
     stalled = 0
     lbfgs_start = time.perf_counter()
     for lbfgs_step in range(lbfgs_steps):
+        if args.lbfgs_resample_every and lbfgs_step > 0 and lbfgs_step % args.lbfgs_resample_every == 0:
+            points.collocation = with_pde_at_t0(lbfgs_sampler.sample(), points.t0_points)
+            # A fresh optimizer: kept, the next step would pair this set's
+            # gradient with the last set's into a bogus curvature update.
+            lbfgs = make_lbfgs()
+            best_total, stalled = None, 0
+            lbfgs_resample_steps.append(len(history["total"]))
+            print(f"[lbfgs] step {lbfgs_step + 1:3d}/{lbfgs_steps} resampled {points.collocation.shape[0]} points")
         stats_now = layer_stats is not None and lbfgs_step % args.layer_stats_every == 0
         if stats_now:
             # The step's first closure call evaluates these same weights, so

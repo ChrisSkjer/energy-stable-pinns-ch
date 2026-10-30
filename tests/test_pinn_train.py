@@ -43,6 +43,18 @@ def test_parse_args_rejects_resampling_a_grid(monkeypatch):
         parse_args()
 
 
+def test_parse_args_rejects_lbfgs_resampling_a_grid(monkeypatch):
+    import pytest
+
+    from src.pinn.train import parse_args
+
+    monkeypatch.setattr("sys.argv", ["train", "--collocation", "grid", "--lbfgs-resample-every", "5"])
+    with pytest.raises(SystemExit):
+        parse_args()
+    monkeypatch.setattr("sys.argv", ["train", "--collocation", "sobol", "--lbfgs-resample-every", "5"])
+    assert parse_args().lbfgs_resample_every == 5
+
+
 def test_parse_args_rejects_grid_shape_without_grid(monkeypatch):
     import pytest
 
