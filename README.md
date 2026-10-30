@@ -389,9 +389,9 @@ are given). Values are snapped to the nearest grid column/row. For the
 .venv\Scripts\python.exe scripts\analyze_run.py demo_run --fem-fields results/eps0.05_nx100_dte-4_two_cricles/fem_fields.npz --profile-y 0.5
 ```
 
-The default `--t` is `0.0 0.001 0.005`, which only fits runs trained with the
-default `--t-max 0.005`. For a shorter run, pass `--t` values inside its
-window, e.g. `--t 0.0 0.0005 0.001` for a `--t-max 0.001` run.
+The default `--t` is five evenly spaced times over the run's own trained
+window, read from the checkpoint: `0 0.0025 0.005 0.0075 0.01` for a
+`--t-max 0.01` run. Pass `--t` to pick other times inside `[0, t_max]`.
 
 **Or run the three by hand** — set `$run` once, paste all three. Do this when
 you want flags the wrapper doesn't expose (`--nx`/`--ny` resolution,

@@ -42,6 +42,17 @@ sys.path.insert(0, str(REPO_ROOT))
 from src.pinn.run_paths import final_path_for  # noqa: E402
 
 
+N_DEFAULT_SNAPSHOTS = 5
+
+
+def default_snapshot_times(t_max: float) -> list[float]:
+    """Evenly spaced snapshot times covering the whole trained window,
+    0, t_max/4, ..., t_max (0.0025 steps for t_max = 0.01). Rounded so
+    linspace's last-bit noise doesn't break the exact match against the
+    FEM snapshot times."""
+    return [round(float(t), 12) for t in np.linspace(0.0, t_max, N_DEFAULT_SNAPSHOTS)]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Evaluate, compute diagnostics for, and plot one trained PINN run"
@@ -51,8 +62,9 @@ def parse_args() -> argparse.Namespace:
         "--t",
         type=float,
         nargs="+",
-        default=[0.0, 0.001, 0.005],
-        help="Snapshot times to evaluate at -- must lie within the run's trained [0, t_max]",
+        default=None,
+        help="Snapshot times to evaluate at -- must lie within the run's trained [0, t_max]. "
+        f"Defaults to {N_DEFAULT_SNAPSHOTS} evenly spaced times over [0, t_max], read from the checkpoint.",
     )
     parser.add_argument("--device", type=str, default="cpu", help="'cpu' locally, 'cuda' on Colab.")
     parser.add_argument(
@@ -147,6 +159,8 @@ def main() -> None:
         analyze_1d(args, checkpoint)
         return
 
+    if args.t is None:
+        args.t = default_snapshot_times(train_args["t_max"])
     evaluate_args = ["--checkpoint-path", checkpoint, "--device", args.device, "--t", *[str(t) for t in args.t]]
     if args.fem_fields:
         if not Path(args.fem_fields).exists():
