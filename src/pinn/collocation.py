@@ -182,6 +182,57 @@ def make_sampler(
     )
 
 
+class WindowedSampler(CollocationSampler):
+    """A base sampler over the whole box plus extra points from a second
+    sampler restricted to a time window, e.g. the initial layer right after
+    t = 0 where a sharp IC gives the largest residual.
+
+    The window points are drawn with the same strategy as the base points
+    and redrawn whenever the base set is, so a resample keeps the extra
+    density. They come after the base points in each returned set.
+    """
+
+    def __init__(self, base: CollocationSampler, window: CollocationSampler):
+        self.base, self.window = base, window
+
+    def sample(self) -> torch.Tensor:
+        return torch.cat([self.base.sample(), self.window.sample()], dim=0)
+
+    def update(self, model: nn.Module, step: int) -> torch.Tensor | None:
+        new = self.base.update(model, step)
+        if new is None:
+            return None
+        return torch.cat([new, self.window.sample()], dim=0)
+
+
+def with_time_window(
+    base: CollocationSampler,
+    name: str,
+    lower: Bounds,
+    upper: Bounds,
+    t_window: tuple[float, float] | None,
+    n_window: int,
+    *,
+    seed: int = 0,
+    device: torch.device | str = "cpu",
+) -> CollocationSampler:
+    """Add `n_window` extra points in t_window = (t_start, t_end) to `base`
+    (see WindowedSampler), or return `base` unchanged when t_window is None
+    or n_window is 0.
+
+    The window points use strategy `name` on the box with the time axis cut
+    to t_window; for "grid" that is a default_grid_shape(n_window) grid.
+    Random/Sobol draws (and grid cell centres) never land exactly on
+    t_start, so t_start = 0 puts no PDE points on the IC itself.
+    """
+    if t_window is None or n_window <= 0:
+        return base
+    window_lower = (*lower[:-1], t_window[0])
+    window_upper = (*upper[:-1], t_window[1])
+    window = make_sampler(name, window_lower, window_upper, n_window, seed=seed, device=device)
+    return WindowedSampler(base, window)
+
+
 def heldout_points(lower: Bounds, upper: Bounds, n: int, seed: int, device: torch.device | str = "cpu") -> torch.Tensor:
     """Fixed set of fresh uniform random points for a held-out residual,
     drawn from its own generator so it never coincides with a training draw.

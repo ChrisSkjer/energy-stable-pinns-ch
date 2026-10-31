@@ -25,7 +25,7 @@ from src.pinn.losses import (
 from src.pinn.layer_stats import LayerStatsLog, update_ratios, weight_snapshot
 from src.pinn.model import PINN
 from src.pinn.run_paths import checkpoints_dir_for, final_path_for, run_dir_for
-from src.pinn.collocation import COLLOCATION_STRATEGIES, RESAMPLABLE, heldout_points, make_sampler
+from src.pinn.collocation import COLLOCATION_STRATEGIES, RESAMPLABLE, heldout_points, make_sampler, with_time_window
 from src.pinn.sampling import TrainingPoints, domain_bounds, heldout_ic_bc_points, sample_points, with_pde_at_t0
 
 
@@ -217,6 +217,26 @@ def parse_args() -> argparse.Namespace:
         "round(lbfgs_n_collocation^(1/(dim+1))) on each axis.",
     )
     parser.add_argument(
+        "--dense-window",
+        type=float,
+        nargs=2,
+        default=None,
+        metavar=("T_START", "T_END"),
+        help="Add --dense-window-n extra PDE points in the time window "
+        "T_START < t < T_END (same --collocation strategy, over the whole "
+        "spatial domain), e.g. 0 1e-4 for the initial layer right after the "
+        "IC. No point lands exactly on t = T_START. The window points are "
+        "redrawn with the interior points (--resample-every, "
+        "--lbfgs-resample-every) and also added to --lbfgs-n-collocation's set.",
+    )
+    parser.add_argument(
+        "--dense-window-n",
+        type=int,
+        default=0,
+        help="Number of extra PDE points in --dense-window (for --collocation "
+        "grid: only picks the window grid shape, round(n^(1/(dim+1))) per axis).",
+    )
+    parser.add_argument(
         "--grid-shape",
         type=int,
         nargs="+",
@@ -311,6 +331,12 @@ def parse_args() -> argparse.Namespace:
             parser.error("--lbfgs-grid-shape only applies to --collocation grid with --lbfgs-n-collocation")
         if len(args.lbfgs_grid_shape) != args.dim + 1:
             parser.error(f"--lbfgs-grid-shape needs {args.dim + 1} values for --dim {args.dim}")
+    if (args.dense_window is None) != (args.dense_window_n == 0):
+        parser.error("--dense-window and --dense-window-n go together")
+    if args.dense_window is not None:
+        t_start, t_end = args.dense_window
+        if not 0 <= t_start < t_end <= args.t_max:
+            parser.error(f"--dense-window needs 0 <= T_START < T_END <= --t-max ({args.t_max})")
     ics = INITIAL_CONDITIONS if args.dim == 2 else INITIAL_CONDITIONS_1D
     if args.ic is None:
         args.ic = "cross" if args.dim == 2 else "cosine"
@@ -375,8 +401,21 @@ def train(args: argparse.Namespace) -> None:
         grid_shape=args.grid_shape,
         device=device,
     )
+    n_dense_window = 50 if args.smoke_test else args.dense_window_n
+    # Seeds +4/+5 for the window points: +1/+2 are the held-out sets, +3
+    # L-BFGS's fresh set.
+    sampler = with_time_window(
+        sampler, args.collocation, lower, upper, args.dense_window, n_dense_window,
+        seed=args.sampling_seed + 4, device=device,
+    )
     collocation = sampler.sample()
     print(f"collocation: {args.collocation}, {collocation.shape[0]} interior points")
+    if args.dense_window is not None:
+        approx = " (rounded to a grid)" if args.collocation == "grid" else ""
+        print(
+            f"dense window: {n_dense_window}{approx} of them in "
+            f"{args.dense_window[0]:g} < t < {args.dense_window[1]:g}"
+        )
     points = sample_points(
         lower=lower,
         upper=upper,
@@ -578,6 +617,10 @@ def train(args: argparse.Namespace) -> None:
             seed=args.sampling_seed + 3,
             grid_shape=args.lbfgs_grid_shape,
             device=device,
+        )
+        lbfgs_sampler = with_time_window(
+            lbfgs_sampler, args.collocation, lower, upper, args.dense_window, n_dense_window,
+            seed=args.sampling_seed + 5, device=device,
         )
         points.collocation = with_pde_at_t0(lbfgs_sampler.sample(), points.t0_points)
         print(f"[lbfgs] collocation: {args.collocation}, {points.collocation.shape[0]} points")

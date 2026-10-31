@@ -21,6 +21,8 @@ _RUN_SUMMARY_GROUPS: list[tuple[str, tuple[str, ...]]] = [
             "resample_every",
             "lbfgs_n_collocation",
             "lbfgs_grid_shape",
+            "dense_window",
+            "dense_window_n",
             "sampling_seed",
             "n_ic",
             "n_bc",

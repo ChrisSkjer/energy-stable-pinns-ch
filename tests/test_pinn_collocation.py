@@ -8,6 +8,7 @@ from src.pinn.collocation import (
     default_grid_shape,
     heldout_points,
     make_sampler,
+    with_time_window,
 )
 
 LOWER = (0.0, 0.0, 0.0)
@@ -122,3 +123,30 @@ def test_1d_grid_shape():
     assert pts.shape == (24, 2)
     with pytest.raises(ValueError):
         make_sampler("grid", LOWER_1D, UPPER_1D, 0, grid_shape=(4, 5, 6))
+
+
+@pytest.mark.parametrize("name", ["random", "sobol"])
+def test_time_window_adds_points_inside_the_window(name):
+    base = make_sampler(name, LOWER, UPPER, 1000, seed=0)
+    pts = with_time_window(base, name, LOWER, UPPER, (0.0, 1e-5), 500, seed=4).sample()
+    assert pts.shape == (1500, 3)
+    window = pts[1000:]
+    assert torch.all(window[:, 2] > 0.0) and torch.all(window[:, 2] <= 1e-5)
+    # Spread over the whole spatial domain, not squeezed with t.
+    assert window[:, 1].max() > 1.5
+
+
+def test_time_window_is_redrawn_with_the_base_set():
+    base = make_sampler("sobol", LOWER, UPPER, 100, seed=0, resample_every=2)
+    sampler = with_time_window(base, "sobol", LOWER, UPPER, (0.0, 1e-5), 50, seed=4)
+    first = sampler.sample()
+    assert sampler.update(None, 1) is None
+    second = sampler.update(None, 2)
+    assert second.shape == (150, 3)
+    assert not torch.equal(first[100:], second[100:])
+    assert torch.all(second[100:, 2] <= 1e-5)
+
+
+def test_no_time_window_returns_base_unchanged():
+    base = make_sampler("sobol", LOWER, UPPER, 100)
+    assert with_time_window(base, "sobol", LOWER, UPPER, None, 0) is base
