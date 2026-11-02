@@ -237,6 +237,15 @@ def parse_args() -> argparse.Namespace:
         "grid: only picks the window grid shape, round(n^(1/(dim+1))) per axis).",
     )
     parser.add_argument(
+        "--dense-window-reweight",
+        action="store_true",
+        help="Weight the PDE loss so --dense-window counts by its share of the "
+        "time interval, fraction * mean(window) + (1 - fraction) * "
+        "mean(rest), instead of by its number of points: the extra points "
+        "then add resolution in the window but no extra weight. The held-out "
+        "residual is a plain mean either way.",
+    )
+    parser.add_argument(
         "--grid-shape",
         type=int,
         nargs="+",
@@ -333,6 +342,8 @@ def parse_args() -> argparse.Namespace:
             parser.error(f"--lbfgs-grid-shape needs {args.dim + 1} values for --dim {args.dim}")
     if (args.dense_window is None) != (args.dense_window_n == 0):
         parser.error("--dense-window and --dense-window-n go together")
+    if args.dense_window_reweight and args.dense_window is None:
+        parser.error("--dense-window-reweight needs --dense-window")
     if args.dense_window is not None:
         t_start, t_end = args.dense_window
         if not 0 <= t_start < t_end <= args.t_max:
@@ -429,8 +440,15 @@ def train(args: argparse.Namespace) -> None:
         ic_seed=args.ic_seed,
     )
 
+    # (t_start, t_end, share of [0, t_max]) for --dense-window-reweight.
+    pde_window = None
+    if args.dense_window_reweight:
+        t_start, t_end = args.dense_window
+        pde_window = (t_start, t_end, (t_end - t_start) / (upper[-1] - lower[-1]))
+        print(f"dense window reweighted to {pde_window[2]:.4g} of the PDE loss")
+
     def compute_loss(points: TrainingPoints) -> dict[str, torch.Tensor]:
-        loss_pde_u, loss_pde_mu = pde_residual_losses(model, points.collocation, epsilon=args.epsilon)
+        loss_pde_u, loss_pde_mu = pde_residual_losses(model, points.collocation, epsilon=args.epsilon, window=pde_window)
         losses = {
             "pde_u": args.pde_u_weight * loss_pde_u,
             "pde_mu": args.pde_mu_weight * loss_pde_mu,

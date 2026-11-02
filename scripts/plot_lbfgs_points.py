@@ -83,6 +83,13 @@ OUT = MODELS / "_lbfgs_points"
 FIRST_STEP = 1500
 
 
+def legend_below(fig, axes):
+    """One shared legend below both panels, so it never covers the curves."""
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.0), ncol=2, fontsize=8, frameon=False)
+    fig.tight_layout()
+
+
 def plot_l2(runs, out, fem_path=FEM, early=False, styles=None):
     """With early=True: log t axis (t = 0 dropped), sparse markers, and a line at t = 1e-4,
     where the held-out residual rise ends. styles: optional (color, line style, marker)
@@ -94,7 +101,7 @@ def plot_l2(runs, out, fem_path=FEM, early=False, styles=None):
         keep = t > 0 if early else slice(None)
         color, style, marker = styles[k] if styles else (LINE_COLORS[k], LINE_STYLES[k], LINE_MARKERS[k])
         for ax, name in zip(axes, ["u", "mu"]):
-            ax.plot(t[keep], errors[name][keep], style, color=color,
+            ax.plot(t[keep], errors[name][keep], linestyle=style, color=color,
                     marker=marker, markersize=4, markevery=0.1 if early else 1, label=label)
         print(f"{label}: u mean {np.nanmean(errors['u']):.3f}%, mu mean {np.nanmean(errors['mu']):.3f}%")
     for ax, name in zip(axes, ["u", "\\mu"]):
@@ -105,10 +112,7 @@ def plot_l2(runs, out, fem_path=FEM, early=False, styles=None):
         ax.set_xlabel("$t$")
         ax.set_ylabel("relative $L^2$ error vs FEM [%]")
         ax.grid(alpha=0.3)
-    # one shared legend below both panels, so it never covers the curves
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.0), ncol=2, fontsize=8, frameon=False)
-    fig.tight_layout()
+    legend_below(fig, axes)
     fig.savefig(out, bbox_inches="tight")
     print(f"saved {out}")
 
@@ -118,27 +122,28 @@ def plot_heldout(runs, out):
     points (thin line, divided by the loss weight), per history step, from
     FIRST_STEP on: late Adam and all of L-BFGS, without the early Adam spikes."""
     fig, axes = plt.subplots(1, 2, figsize=(9, 3.4), sharex=True)
+    adam_steps = set()
     for k, (label, run) in enumerate(runs.items()):
         checkpoint = torch.load(MODELS / run / "final.pt", map_location="cpu", weights_only=False)
         args, history, heldout = checkpoint["args"], checkpoint["history"], checkpoint["heldout"]
+        adam_steps.add(checkpoint["adam_steps"])
         for ax, name in zip(axes, ["pde_u", "pde_mu"]):
             train = np.array(history[name]) / args[f"{name}_weight"]
             steps = np.arange(len(train))
             ax.semilogy(steps[FIRST_STEP:], train[FIRST_STEP:], "-", lw=0.6, alpha=0.6, color=LINE_COLORS[k])
             held_steps, held = np.array(heldout["step"]), np.array(heldout[name])
             keep = held_steps >= FIRST_STEP
-            ax.semilogy(held_steps[keep], held[keep], LINE_STYLES[k], lw=1.5, color=LINE_COLORS[k],
+            ax.semilogy(held_steps[keep], held[keep], linestyle=LINE_STYLES[k], lw=1.5, color=LINE_COLORS[k],
                         marker=LINE_MARKERS[k], markersize=4, markevery=20, label=label)
-        adam_steps = checkpoint["adam_steps"]  # the same 2000 Adam epochs in every run
     for ax, title in zip(axes, ["$u$-equation residual", "$\\mu$-equation residual"]):
-        ax.axvline(adam_steps, lw=1, ls=":", color="0.4")
+        for step in adam_steps:  # one line per Adam -> L-BFGS switch
+            ax.axvline(step, lw=1, ls=":", color="0.4")
         ax.set_title(title)
         ax.set_xlabel("step")
         ax.set_ylabel("mean squared residual (unweighted)")
         ax.grid(True, which="both", alpha=0.3)
-    axes[0].legend(fontsize=8)
-    fig.tight_layout()
-    fig.savefig(out)
+    legend_below(fig, axes)
+    fig.savefig(out, bbox_inches="tight")
     print(f"saved {out}")
 
 
@@ -166,7 +171,7 @@ def plot_heldout_windows(runs, out, n_window=8000, seed=123):
         print(f"{label}: pde_u {np.array(res['pde_u'])}, pde_mu {np.array(res['pde_mu'])}")
         x = np.arange(len(labels))
         for ax, name in zip(axes, ["pde_u", "pde_mu"]):
-            ax.semilogy(x, res[name], LINE_STYLES[k], color=LINE_COLORS[k],
+            ax.semilogy(x, res[name], linestyle=LINE_STYLES[k], color=LINE_COLORS[k],
                         marker=LINE_MARKERS[k], markersize=5, label=label)
     for ax, title in zip(axes, ["$u$-equation residual", "$\\mu$-equation residual"]):
         ax.set_xticks(np.arange(len(labels)), labels, rotation=30, ha="right", fontsize=8)
@@ -174,9 +179,8 @@ def plot_heldout_windows(runs, out, n_window=8000, seed=123):
         ax.set_xlabel("time window $[t_0, t_1]$")
         ax.set_ylabel("held-out mean squared residual")
         ax.grid(True, which="both", alpha=0.3)
-    axes[0].legend(fontsize=8)
-    fig.tight_layout()
-    fig.savefig(out)
+    legend_below(fig, axes)
+    fig.savefig(out, bbox_inches="tight")
     print(f"saved {out}")
 
 

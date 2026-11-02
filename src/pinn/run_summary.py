@@ -23,6 +23,7 @@ _RUN_SUMMARY_GROUPS: list[tuple[str, tuple[str, ...]]] = [
             "lbfgs_grid_shape",
             "dense_window",
             "dense_window_n",
+            "dense_window_reweight",
             "sampling_seed",
             "n_ic",
             "n_bc",

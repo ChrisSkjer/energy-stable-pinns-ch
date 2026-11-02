@@ -18,7 +18,29 @@ from torch import nn
 DEFAULT_EPSILON = 0.05
 
 
-def pde_residual_losses(model: nn.Module, collocation_points: torch.Tensor, epsilon = DEFAULT_EPSILON, m = 1.0) -> tuple[torch.Tensor, torch.Tensor]:
+def window_weighted_mean(squared: torch.Tensor, t: torch.Tensor, window: tuple[float, float, float] | None) -> torch.Tensor:
+    """Mean of `squared` over the points, or, with window = (t_start, t_end,
+    fraction), the stratified mean
+
+        fraction * mean(inside) + (1 - fraction) * mean(outside)
+
+    where inside means t_start < t < t_end and `fraction` is the window's
+    share of the time interval. This estimates the same space-time average
+    as uniform points would, so extra points in the window (--dense-window)
+    add resolution there without giving the window more weight in the loss.
+    Falls back to the plain mean if either side has no points.
+    """
+    if window is None:
+        return torch.mean(squared)
+    t_start, t_end, fraction = window
+    inside = ((t > t_start) & (t < t_end)).squeeze(-1)
+    n_inside = int(inside.sum())
+    if n_inside == 0 or n_inside == inside.numel():
+        return torch.mean(squared)
+    return fraction * torch.mean(squared[inside]) + (1 - fraction) * torch.mean(squared[~inside])
+
+
+def pde_residual_losses(model: nn.Module, collocation_points: torch.Tensor, epsilon = DEFAULT_EPSILON, m = 1.0, window: tuple[float, float, float] | None = None) -> tuple[torch.Tensor, torch.Tensor]:
     """Residuals of both equations of the Cahn-Hilliard PDE (mixed u/mu
     formulation), at collocation points, via automatic differentiation:
 
@@ -37,6 +59,9 @@ def pde_residual_losses(model: nn.Module, collocation_points: torch.Tensor, epsi
         collocation_points: (N, input_dim) interior points, requires_grad=True.
         epsilon: interface half-width.
         m: mobility.
+        window: (t_start, t_end, fraction) to reweight a denser time window
+            back to its share of the interval (see window_weighted_mean);
+            None = plain mean over the points.
 
     Returns:
         (loss_pde_u, loss_pde_mu): scalar MSEs of the u- and mu-equation residuals.
@@ -57,7 +82,8 @@ def pde_residual_losses(model: nn.Module, collocation_points: torch.Tensor, epsi
     f_u = (u**2 - 1) * u
     residual_mu = mu - f_u + epsilon**2 * lap_u
 
-    return torch.mean(residual_u**2), torch.mean(residual_mu**2)
+    t = collocation_points[:, -1:]
+    return window_weighted_mean(residual_u**2, t, window), window_weighted_mean(residual_mu**2, t, window)
 
 
 def laplacian(grad: torch.Tensor, points: torch.Tensor) -> torch.Tensor:
