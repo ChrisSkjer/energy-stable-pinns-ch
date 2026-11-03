@@ -90,10 +90,11 @@ def legend_below(fig, axes):
     fig.tight_layout()
 
 
-def plot_l2(runs, out, fem_path=FEM, early=False, styles=None):
+def plot_l2(runs, out, fem_path=FEM, early=False, styles=None, title=None):
     """With early=True: log t axis (t = 0 dropped), sparse markers, and a line at t = 1e-4,
     where the held-out residual rise ends. styles: optional (color, line style, marker)
-    per run, instead of the k-th LINE_COLORS/LINE_STYLES/LINE_MARKERS."""
+    per run, instead of the k-th LINE_COLORS/LINE_STYLES/LINE_MARKERS. title: optional
+    figure title above both panels, e.g. the training budget."""
     fem = dict(np.load(fem_path))
     fig, axes = plt.subplots(1, 2, figsize=(9, 3.4), sharex=True)
     for k, (label, run) in enumerate(runs.items()):
@@ -112,6 +113,8 @@ def plot_l2(runs, out, fem_path=FEM, early=False, styles=None):
         ax.set_xlabel("$t$")
         ax.set_ylabel("relative $L^2$ error vs FEM [%]")
         ax.grid(alpha=0.3)
+    if title:
+        fig.suptitle(title)
     legend_below(fig, axes)
     fig.savefig(out, bbox_inches="tight")
     print(f"saved {out}")

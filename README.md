@@ -303,7 +303,9 @@ selectable, so sampling experiments differ by one flag
 epochs (Sobol continues its sequence rather than restarting). L-BFGS always
 keeps the last set fixed, since its line search needs a deterministic loss.
 `--sampling-seed` (default `0`) makes the draw reproducible. The
-`--pde-at-t0` points are kept across resamples.
+`--pde-at-t0` points are kept across resamples. `--weight-seed` (default
+`0`) seeds the network's initial weights, so runs that differ only in other
+settings start from the same initialisation.
 
 The training loss only sees the training points, so it can't show a
 network overfitting them. `--heldout-every K` logs the unweighted PDE

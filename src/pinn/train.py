@@ -262,6 +262,13 @@ def parse_args() -> argparse.Namespace:
         "so a run's points can be reproduced.",
     )
     parser.add_argument(
+        "--weight-seed",
+        type=int,
+        default=0,
+        help="Seed for the network's initial weights, so runs that differ "
+        "only in other settings start from the same initialisation.",
+    )
+    parser.add_argument(
         "--heldout-every",
         type=int,
         default=25,
@@ -387,6 +394,7 @@ def train(args: argparse.Namespace) -> None:
     device = torch.device(args.device)
     lower, upper = domain_bounds(args.dim, args.x_max, args.y_max, args.t_max)
 
+    torch.manual_seed(args.weight_seed)
     model = PINN(
         lower_bound=lower,
         upper_bound=upper,
