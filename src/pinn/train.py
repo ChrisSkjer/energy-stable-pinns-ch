@@ -294,6 +294,17 @@ def parse_args() -> argparse.Namespace:
         "--adaptive-pool", type=int, default=20000, help="Candidate points scored per adaptive round"
     )
     parser.add_argument(
+        "--adaptive-reweight-bins",
+        type=int,
+        default=0,
+        help="Weight the PDE loss over this many equal time bins, each by its "
+        "share of the time interval, sum_k (1/K) * mean(bin k), instead of by "
+        "its number of points (0 = off, plain mean): the adaptive points then "
+        "add resolution where they cluster in t but no extra weight, like "
+        "--dense-window-reweight. E.g. 100 bins of 1e-4 for --t-max 0.01. "
+        "The held-out residual is a plain mean either way.",
+    )
+    parser.add_argument(
         "--grid-shape",
         type=int,
         nargs="+",
@@ -401,6 +412,12 @@ def parse_args() -> argparse.Namespace:
         parser.error("--dense-window and --dense-window-n go together")
     if args.dense_window_reweight and args.dense_window is None:
         parser.error("--dense-window-reweight needs --dense-window")
+    if args.adaptive_reweight_bins < 0:
+        parser.error("--adaptive-reweight-bins must be >= 0")
+    if args.adaptive_reweight_bins and not (args.adaptive_every or args.lbfgs_adaptive_every):
+        parser.error("--adaptive-reweight-bins needs --adaptive-every or --lbfgs-adaptive-every")
+    if args.adaptive_reweight_bins and args.dense_window_reweight:
+        parser.error("--adaptive-reweight-bins and --dense-window-reweight are two ways to weight the PDE loss; pick one")
     if args.dense_window is not None:
         t_start, t_end = args.dense_window
         if not 0 <= t_start < t_end <= args.t_max:
@@ -534,9 +551,16 @@ def train(args: argparse.Namespace) -> None:
         t_start, t_end = args.dense_window
         pde_window = (t_start, t_end, (t_end - t_start) / (upper[-1] - lower[-1]))
         print(f"dense window reweighted to {pde_window[2]:.4g} of the PDE loss")
+    # Equal time-bin edges for --adaptive-reweight-bins.
+    pde_t_bins = None
+    if args.adaptive_reweight_bins:
+        pde_t_bins = torch.linspace(lower[-1], upper[-1], args.adaptive_reweight_bins + 1, device=device)
+        print(f"PDE loss reweighted over {args.adaptive_reweight_bins} time bins of {(upper[-1] - lower[-1]) / args.adaptive_reweight_bins:.4g}")
 
     def compute_loss(points: TrainingPoints) -> dict[str, torch.Tensor]:
-        loss_pde_u, loss_pde_mu = pde_residual_losses(model, points.collocation, epsilon=args.epsilon, window=pde_window)
+        loss_pde_u, loss_pde_mu = pde_residual_losses(
+            model, points.collocation, epsilon=args.epsilon, window=pde_window, t_bins=pde_t_bins
+        )
         losses = {
             "pde_u": args.pde_u_weight * loss_pde_u,
             "pde_mu": args.pde_mu_weight * loss_pde_mu,

@@ -56,3 +56,37 @@ def test_bc_loss_1d_uses_x_normal_at_both_ends():
     loss = bc_loss(_ClosedForm(), ends.requires_grad_(True))
     expected = torch.mean(torch.cat([torch.zeros_like(t), 2 * t]) ** 2)
     torch.testing.assert_close(loss, expected, atol=1e-12, rtol=1e-9)
+
+
+def test_time_binned_mean_weights_bins_by_share_not_count():
+    from src.pinn.losses import time_binned_mean
+
+    # Bin [0, 0.5): one point with value 1; bin [0.5, 1]: three points with value 3.
+    t = torch.tensor([[0.1], [0.6], [0.7], [1.0]])
+    squared = torch.tensor([[1.0], [3.0], [3.0], [3.0]])
+    edges = torch.tensor([0.0, 0.5, 1.0])
+    assert time_binned_mean(squared, t, edges).item() == pytest.approx(0.5 * 1 + 0.5 * 3)
+
+
+def test_time_binned_mean_matches_window_reweight_and_plain_mean():
+    from src.pinn.losses import time_binned_mean, window_weighted_mean
+
+    torch.manual_seed(0)
+    t = torch.rand(4000, 1)
+    squared = torch.rand(4000, 1)
+    # Evenly spread points in equal bins: every bin holds the same count, so the plain mean.
+    t_even = (torch.arange(4000, dtype=torch.float32).reshape(-1, 1) + 0.5) / 4000
+    assert time_binned_mean(squared, t_even, torch.linspace(0, 1, 11)).item() == pytest.approx(squared.mean().item(), rel=1e-5)
+    # Two bins at the window edge give the --dense-window-reweight mean.
+    window = (0.0, 0.2, 0.2)
+    binned = time_binned_mean(squared, t, torch.tensor([0.0, 0.2, 1.0]))
+    assert binned.item() == pytest.approx(window_weighted_mean(squared, t, window).item(), rel=1e-5)
+
+
+def test_time_binned_mean_drops_empty_bins():
+    from src.pinn.losses import time_binned_mean
+
+    t = torch.tensor([[0.1], [0.9]])
+    squared = torch.tensor([[2.0], [4.0]])
+    # The middle bin is empty: the other two share the weight equally.
+    assert time_binned_mean(squared, t, torch.linspace(0, 1, 4)).item() == pytest.approx(3.0)

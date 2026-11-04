@@ -40,7 +40,30 @@ def window_weighted_mean(squared: torch.Tensor, t: torch.Tensor, window: tuple[f
     return fraction * torch.mean(squared[inside]) + (1 - fraction) * torch.mean(squared[~inside])
 
 
-def pde_residual_losses(model: nn.Module, collocation_points: torch.Tensor, epsilon = DEFAULT_EPSILON, m = 1.0, window: tuple[float, float, float] | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+def time_binned_mean(squared: torch.Tensor, t: torch.Tensor, edges: torch.Tensor) -> torch.Tensor:
+    """Stratified mean of `squared` over time bins,
+
+        sum_k f_k * mean(bin k),   f_k = (edges[k+1] - edges[k]) / (edges[-1] - edges[0]),
+
+    so every bin counts by its share of the time interval, however many points
+    it holds. Extra points that cluster in time (--adaptive-reweight-bins) then
+    add resolution there without giving that time more weight in the loss; with
+    evenly spread points it is (about) the plain mean. Points outside the edges
+    go to the first/last bin. Empty bins are dropped and the remaining shares
+    renormalised.
+    """
+    edges = edges.to(t.device, t.dtype)
+    n_bins = edges.numel() - 1
+    index = torch.bucketize(t.reshape(-1), edges[1:-1], right=True)
+    flat = squared.reshape(-1)
+    sums = torch.zeros(n_bins, device=flat.device, dtype=flat.dtype).index_add(0, index, flat)
+    counts = torch.bincount(index, minlength=n_bins).to(flat.dtype)
+    filled = counts > 0
+    shares = torch.diff(edges)[filled]
+    return torch.sum(shares / shares.sum() * sums[filled] / counts[filled])
+
+
+def pde_residual_losses(model: nn.Module, collocation_points: torch.Tensor, epsilon = DEFAULT_EPSILON, m = 1.0, window: tuple[float, float, float] | None = None, t_bins: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
     """Residuals of both equations of the Cahn-Hilliard PDE (mixed u/mu
     formulation), at collocation points, via automatic differentiation:
 
@@ -62,12 +85,19 @@ def pde_residual_losses(model: nn.Module, collocation_points: torch.Tensor, epsi
         window: (t_start, t_end, fraction) to reweight a denser time window
             back to its share of the interval (see window_weighted_mean);
             None = plain mean over the points.
+        t_bins: (K + 1,) time-bin edges to weight each bin by its share of
+            the interval instead (see time_binned_mean); not together with
+            `window`.
 
     Returns:
         (loss_pde_u, loss_pde_mu): scalar MSEs of the u- and mu-equation residuals.
     """
     residual_u, residual_mu = pde_residuals(model, collocation_points, epsilon=epsilon, m=m)
     t = collocation_points[:, -1:]
+    if t_bins is not None:
+        if window is not None:
+            raise ValueError("pass either window or t_bins, not both")
+        return time_binned_mean(residual_u**2, t, t_bins), time_binned_mean(residual_mu**2, t, t_bins)
     return window_weighted_mean(residual_u**2, t, window), window_weighted_mean(residual_mu**2, t, window)
 
 
