@@ -55,6 +55,18 @@ def test_parse_args_rejects_lbfgs_resampling_a_grid(monkeypatch):
     assert parse_args().lbfgs_resample_every == 5
 
 
+def test_parse_args_rejects_adaptive_sampling_with_a_grid(monkeypatch):
+    import pytest
+
+    from src.pinn.train import parse_args
+
+    monkeypatch.setattr("sys.argv", ["train", "--collocation", "grid", "--adaptive-every", "100"])
+    with pytest.raises(SystemExit):
+        parse_args()
+    monkeypatch.setattr("sys.argv", ["train", "--collocation", "sobol", "--lbfgs-adaptive-every", "5"])
+    assert parse_args().lbfgs_adaptive_every == 5
+
+
 def test_parse_args_rejects_grid_shape_without_grid(monkeypatch):
     import pytest
 

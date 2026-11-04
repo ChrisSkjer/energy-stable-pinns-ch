@@ -13,6 +13,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import src.common.plotting  # noqa: E402,F401  (sets the colour-blind-safe "C0".."C4")
+from src.pinn.run_paths import run_dir_for  # noqa: E402
 
 MODELS = Path("results/pinn_models")
 OUT = MODELS / "_sampling_heldout"
@@ -32,7 +33,7 @@ RUNS = [
 
 def rel_l2(suffix, field):
     """Relative L2 error of `field` against FEM at the run's evaluation times."""
-    pinn = np.load(MODELS / f"{PREFIX}{suffix}_heldout_ic-cross" / "evaluation.npz")
+    pinn = np.load(Path(run_dir_for(f"{PREFIX}{suffix}_heldout_ic-cross")) / "evaluation.npz")
     fem = np.load(FEM)
     # FEM mu(0) = 0, so the mu error is only meaningful for t > 0
     first = 1 if field == "mu" else 0

@@ -9,17 +9,17 @@ experiments differ only in where the PDE residual is enforced:
 
 d = len(lower): 3 for the 2D problem (x, y, t), 2 for the 1D one (x, t).
 
-`update` takes the model even though no strategy here uses it yet: a
-residual-based adaptive strategy (e.g. RAD, Wu et al. 2023, "A comprehensive
-study of non-adaptive and residual-based adaptive sampling for PINNs") needs
-it to evaluate the residual on a candidate pool, and slots in as one more
-class in COLLOCATION_STRATEGIES without touching train.py.
+`update` takes the model so a residual-based adaptive strategy can evaluate
+the residual on a candidate pool: AdaptiveSampler (Wight & Zhao 2020) wraps
+any of the strategies and adds the worst candidates to the training set.
 
 Only the interior PDE points live here; the IC and BC points stay on the
 fixed grids built in src/pinn/sampling.py.
 """
 
 from __future__ import annotations
+
+from typing import Callable
 
 import torch
 from torch import nn
@@ -231,6 +231,72 @@ def with_time_window(
     window_upper = (*upper[:-1], t_window[1])
     window = make_sampler(name, window_lower, window_upper, n_window, seed=seed, device=device)
     return WindowedSampler(base, window)
+
+
+class AdaptiveSampler(CollocationSampler):
+    """Residual-based adaptive refinement after Wight & Zhao (2020), "Solving
+    Allen-Cahn and Cahn-Hilliard equations using the adaptive physics
+    informed neural networks": every `every` steps, score a set of
+    candidate points by their PDE residual and add the `n_add` worst ones to
+    the training set, so it keeps track of the regions that are hard to fit.
+
+    The candidates are a fresh draw from `pool` each round (Wight & Zhao use
+    a second Latin hypercube set; here it is the next random/Sobol draw), so
+    a point is never picked twice. Added points accumulate and survive a
+    resample of the base set; they come after the base points in each
+    returned set. The pool has its own seed, so it never overlaps the
+    held-out set, which stays an honest test of the fit.
+
+    Args:
+        base: sampler for the regular training points.
+        pool: sampler for the candidates (random or Sobol).
+        n_add: points added per round.
+        score: score(model, points) -> (n,) pointwise residual to rank by.
+        every: refine every this many update() steps (0 = only when
+            refine() is called directly, as train.py does in L-BFGS).
+    """
+
+    def __init__(
+        self,
+        base: CollocationSampler,
+        pool: CollocationSampler,
+        n_add: int,
+        score: Callable[[nn.Module, torch.Tensor], torch.Tensor],
+        every: int = 0,
+    ):
+        self.base, self.pool, self.n_add, self.score, self.every = base, pool, n_add, score, every
+        self.current: torch.Tensor | None = None
+        self.added: torch.Tensor | None = None
+        # Step (passed to refine) at which each added point came in.
+        self.added_step = torch.empty(0, dtype=torch.long)
+
+    def _combined(self) -> torch.Tensor:
+        if self.added is None:
+            return self.current
+        return torch.cat([self.current, self.added.to(self.current.device)], dim=0)
+
+    def sample(self) -> torch.Tensor:
+        self.current = self.base.sample()
+        return self._combined()
+
+    def refine(self, model: nn.Module, step: int) -> torch.Tensor:
+        """Add the n_add highest-residual points of a fresh pool draw and
+        return the new training set."""
+        candidates = self.pool.sample()
+        scores = self.score(model, candidates).detach().reshape(-1)
+        worst = torch.topk(scores, min(self.n_add, scores.numel())).indices
+        chosen = candidates[worst].detach()
+        self.added = chosen if self.added is None else torch.cat([self.added, chosen], dim=0)
+        self.added_step = torch.cat([self.added_step, torch.full((chosen.shape[0],), step, dtype=torch.long)])
+        return self._combined()
+
+    def update(self, model: nn.Module, step: int) -> torch.Tensor | None:
+        new = self.base.update(model, step)
+        if new is not None:
+            self.current = new
+        if self.every and step > 0 and step % self.every == 0:
+            return self.refine(model, step)
+        return None if new is None else self._combined()
 
 
 def heldout_points(lower: Bounds, upper: Bounds, n: int, seed: int, device: torch.device | str = "cpu") -> torch.Tensor:

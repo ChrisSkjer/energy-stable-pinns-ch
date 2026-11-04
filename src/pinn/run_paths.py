@@ -12,17 +12,27 @@ that same folder by walking back up from whichever checkpoint file they were
 pointed at, via infer_run_dir -- so a checkpoint, its evaluation, its
 diagnostics, and its plots end up findable in one place without retyping the
 run name in four separate flags.
+
+Finished runs may be filed into one level of group folders
+(results/pinn_models/_<group>/<run_name>/); run_dir_for finds them there too.
 """
 
 from __future__ import annotations
 
+import glob
 import os
 
 RUNS_ROOT = os.path.join("results", "pinn_models")
 
 
 def run_dir_for(run_name: str) -> str:
-    return os.path.join(RUNS_ROOT, run_name)
+    """results/pinn_models/<run_name>, or _<group>/<run_name> if it was filed
+    into a group folder. New run names resolve to the top level."""
+    top = os.path.join(RUNS_ROOT, run_name)
+    if os.path.isdir(top):
+        return top
+    grouped = sorted(glob.glob(os.path.join(RUNS_ROOT, "_*", glob.escape(run_name))))
+    return grouped[0] if grouped else top
 
 
 def checkpoints_dir_for(run_name: str) -> str:

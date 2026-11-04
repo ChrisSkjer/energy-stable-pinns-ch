@@ -28,6 +28,7 @@ from compare_residuals import T_EDGE_FRACTIONS  # noqa: E402
 from src.pinn.collocation import heldout_points  # noqa: E402
 from src.pinn.evaluate import load_model  # noqa: E402
 from src.pinn.losses import pde_residual_losses  # noqa: E402
+from src.pinn.run_paths import run_dir_for  # noqa: E402
 
 MODELS = Path("results/pinn_models")
 BASE = "eps0.05_h100x5_t0_0.01_p20000_wmu10000_icw10000_nopdeat-t0_icnorm_e2000-lb120_sobol_heldout"
@@ -127,7 +128,7 @@ def plot_heldout(runs, out):
     fig, axes = plt.subplots(1, 2, figsize=(9, 3.4), sharex=True)
     adam_steps = set()
     for k, (label, run) in enumerate(runs.items()):
-        checkpoint = torch.load(MODELS / run / "final.pt", map_location="cpu", weights_only=False)
+        checkpoint = torch.load(Path(run_dir_for(run)) / "final.pt", map_location="cpu", weights_only=False)
         args, history, heldout = checkpoint["args"], checkpoint["history"], checkpoint["heldout"]
         adam_steps.add(checkpoint["adam_steps"])
         for ax, name in zip(axes, ["pde_u", "pde_mu"]):
@@ -157,9 +158,9 @@ def plot_heldout_windows(runs, out, n_window=8000, seed=123):
     fig, axes = plt.subplots(1, 2, figsize=(9, 3.4), sharex=True)
     labels = None
     for k, (label, run) in enumerate(runs.items()):
-        checkpoint = torch.load(MODELS / run / "final.pt", map_location="cpu", weights_only=False)
+        checkpoint = torch.load(Path(run_dir_for(run)) / "final.pt", map_location="cpu", weights_only=False)
         args = checkpoint["args"]
-        model = load_model(str(MODELS / run / "final.pt"))
+        model = load_model(str(Path(run_dir_for(run)) / "final.pt"))
         t_max = args["t_max"]
         upper = (args["x_max"], args["y_max"], t_max)
         res = {"pde_u": [], "pde_mu": []}

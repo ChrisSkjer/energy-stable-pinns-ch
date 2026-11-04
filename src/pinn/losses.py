@@ -66,6 +66,15 @@ def pde_residual_losses(model: nn.Module, collocation_points: torch.Tensor, epsi
     Returns:
         (loss_pde_u, loss_pde_mu): scalar MSEs of the u- and mu-equation residuals.
     """
+    residual_u, residual_mu = pde_residuals(model, collocation_points, epsilon=epsilon, m=m)
+    t = collocation_points[:, -1:]
+    return window_weighted_mean(residual_u**2, t, window), window_weighted_mean(residual_mu**2, t, window)
+
+
+def pde_residuals(model: nn.Module, collocation_points: torch.Tensor, epsilon = DEFAULT_EPSILON, m = 1.0) -> tuple[torch.Tensor, torch.Tensor]:
+    """Pointwise (N, 1) residuals (residual_u, residual_mu) behind
+    `pde_residual_losses`, e.g. to rank points for adaptive sampling.
+    `collocation_points` needs requires_grad=True."""
     out = model(collocation_points)
     u, mu = out[:,0:1], out[:,1:2]
 
@@ -81,9 +90,7 @@ def pde_residual_losses(model: nn.Module, collocation_points: torch.Tensor, epsi
     #f = 1/4 * (u**2 - 1)**2 dobbel well
     f_u = (u**2 - 1) * u
     residual_mu = mu - f_u + epsilon**2 * lap_u
-
-    t = collocation_points[:, -1:]
-    return window_weighted_mean(residual_u**2, t, window), window_weighted_mean(residual_mu**2, t, window)
+    return residual_u, residual_mu
 
 
 def laplacian(grad: torch.Tensor, points: torch.Tensor) -> torch.Tensor:

@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.common.metrics import relative_l2_error  # noqa: E402
 from src.common.plotting import LINE_COLORS, LINE_MARKERS, LINE_STYLES  # noqa: E402  (also sets the colour-blind-safe cycle)
 from src.pinn.evaluate import evaluate_over_time, load_model  # noqa: E402
+from src.pinn.run_paths import run_dir_for  # noqa: E402
 
 MODELS = Path("results/pinn_models")
 BASE = "eps0.05_h100x5_t0_0.01_p20000_wmu10000_icw10000_nopdeat-t0_icnorm_e2000-lb120_sobol_heldout"
@@ -29,7 +30,7 @@ OUT = MODELS / "_ic_pretrain"
 
 def rel_l2_series(run, fem):
     """Relative L2 error [%] of u and mu at every FEM time in the run's window."""
-    model = load_model(str(MODELS / run / "final.pt"))
+    model = load_model(str(Path(run_dir_for(run)) / "final.pt"))
     t_max = model.upper_bound[-1].item()
     idx = np.nonzero(fem["t"] <= t_max * (1 + 1e-6))[0]
     nx, ny = fem["x"].shape
@@ -50,7 +51,7 @@ def plot_loss_history(out):
     fig, axes = plt.subplots(1, 2, figsize=(9, 3.4), sharex=True)
     pretrain_len = 0
     for k, (label, run) in enumerate(RUNS.items()):
-        checkpoint = torch.load(MODELS / run / "final.pt", map_location="cpu", weights_only=False)
+        checkpoint = torch.load(Path(run_dir_for(run)) / "final.pt", map_location="cpu", weights_only=False)
         history, pretrain = checkpoint["history"], checkpoint.get("ic_pretrain", {})
         n_pre = len(pretrain.get("total", []))
         pretrain_len = max(pretrain_len, n_pre)

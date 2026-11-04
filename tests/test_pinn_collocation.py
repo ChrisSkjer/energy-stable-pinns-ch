@@ -5,6 +5,7 @@ import torch
 
 from src.pinn.collocation import (
     COLLOCATION_STRATEGIES,
+    AdaptiveSampler,
     default_grid_shape,
     heldout_points,
     make_sampler,
@@ -150,3 +151,39 @@ def test_time_window_is_redrawn_with_the_base_set():
 def test_no_time_window_returns_base_unchanged():
     base = make_sampler("sobol", LOWER, UPPER, 100)
     assert with_time_window(base, "sobol", LOWER, UPPER, None, 0) is base
+
+
+def _x_score(model, points):
+    """Stand-in residual: largest at large x, so the picks are predictable."""
+    return points[:, 0]
+
+
+def test_adaptive_adds_the_worst_candidates_on_schedule():
+    base = make_sampler("sobol", LOWER, UPPER, 100, seed=0)
+    pool = make_sampler("sobol", LOWER, UPPER, 1000, seed=6)
+    sampler = AdaptiveSampler(base, pool, 20, _x_score, every=3)
+    first = sampler.sample()
+    assert first.shape == (100, 3)
+    assert sampler.update(None, 1) is None and sampler.update(None, 2) is None
+    second = sampler.update(None, 3)
+    assert second.shape == (120, 3)
+    assert torch.equal(second[:100], first)
+    # The 20 highest-x of 1000 Sobol candidates all sit near x = 1.
+    assert torch.all(second[100:, 0] > 0.9)
+    third = sampler.update(None, 6)
+    assert third.shape == (140, 3)
+    # Fresh candidates each round, so no point is added twice.
+    assert torch.unique(third[100:], dim=0).shape[0] == 40
+    assert sampler.added_step.tolist() == [3] * 20 + [6] * 20
+
+
+def test_adaptive_points_survive_a_base_resample():
+    base = make_sampler("sobol", LOWER, UPPER, 100, seed=0, resample_every=2)
+    pool = make_sampler("sobol", LOWER, UPPER, 1000, seed=6)
+    sampler = AdaptiveSampler(base, pool, 10, _x_score)
+    first = sampler.sample()
+    refined = sampler.refine(None, 1)
+    resampled = sampler.update(None, 2)
+    assert resampled.shape == (110, 3)
+    assert not torch.equal(resampled[:100], first)
+    assert torch.equal(resampled[100:], refined[100:])

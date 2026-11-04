@@ -21,11 +21,19 @@ from src.pinn.losses import (
     energy_stability_loss,
     ic_loss,
     pde_residual_losses,
+    pde_residuals,
 )
 from src.pinn.layer_stats import LayerStatsLog, update_ratios, weight_snapshot
 from src.pinn.model import PINN
 from src.pinn.run_paths import checkpoints_dir_for, final_path_for, run_dir_for
-from src.pinn.collocation import COLLOCATION_STRATEGIES, RESAMPLABLE, heldout_points, make_sampler, with_time_window
+from src.pinn.collocation import (
+    COLLOCATION_STRATEGIES,
+    RESAMPLABLE,
+    AdaptiveSampler,
+    heldout_points,
+    make_sampler,
+    with_time_window,
+)
 from src.pinn.sampling import TrainingPoints, domain_bounds, heldout_ic_bc_points, sample_points, with_pde_at_t0
 
 
@@ -246,6 +254,30 @@ def parse_args() -> argparse.Namespace:
         "residual is a plain mean either way.",
     )
     parser.add_argument(
+        "--adaptive-every",
+        type=int,
+        default=0,
+        help="Adaptive sampling after Wight & Zhao (2020): every this many "
+        "Adam epochs, evaluate the PDE residual on --adaptive-pool fresh "
+        "candidate points (same random/sobol strategy, own seed) and add the "
+        "--adaptive-n worst to the training set (0 = off). Added points "
+        "accumulate, survive --resample-every, and carry over to L-BFGS "
+        "(also to --lbfgs-n-collocation's set). Ranked by "
+        "pde_u_weight * r_u^2 + pde_mu_weight * r_mu^2.",
+    )
+    parser.add_argument(
+        "--lbfgs-adaptive-every",
+        type=int,
+        default=0,
+        help="Same adaptive refinement every this many L-BFGS steps (0 = "
+        "off). Like --lbfgs-resample-every it restarts L-BFGS, since the "
+        "point set changes.",
+    )
+    parser.add_argument("--adaptive-n", type=int, default=500, help="Points added per adaptive round")
+    parser.add_argument(
+        "--adaptive-pool", type=int, default=20000, help="Candidate points scored per adaptive round"
+    )
+    parser.add_argument(
         "--grid-shape",
         type=int,
         nargs="+",
@@ -338,6 +370,8 @@ def parse_args() -> argparse.Namespace:
         parser.error(f"--resample-every needs a random strategy, not --collocation {args.collocation}")
     if args.lbfgs_resample_every and args.collocation not in RESAMPLABLE:
         parser.error(f"--lbfgs-resample-every needs a random strategy, not --collocation {args.collocation}")
+    if (args.adaptive_every or args.lbfgs_adaptive_every) and args.collocation not in RESAMPLABLE:
+        parser.error(f"adaptive sampling needs a random strategy for its candidates, not --collocation {args.collocation}")
     if args.grid_shape is not None and args.collocation != "grid":
         parser.error("--grid-shape only applies to --collocation grid")
     if args.grid_shape is not None and len(args.grid_shape) != args.dim + 1:
@@ -427,6 +461,22 @@ def train(args: argparse.Namespace) -> None:
         sampler, args.collocation, lower, upper, args.dense_window, n_dense_window,
         seed=args.sampling_seed + 4, device=device,
     )
+    adaptive: AdaptiveSampler | None = None
+    if args.adaptive_every or args.lbfgs_adaptive_every:
+
+        def residual_score(model: torch.nn.Module, candidates: torch.Tensor) -> torch.Tensor:
+            r_u, r_mu = pde_residuals(model, candidates.detach().requires_grad_(True), epsilon=args.epsilon)
+            return args.pde_u_weight * r_u.detach() ** 2 + args.pde_mu_weight * r_mu.detach() ** 2
+
+        # Seed +6 for the candidates: +1..+5 are taken (see below and above).
+        pool = make_sampler(
+            args.collocation, lower, upper, 200 if args.smoke_test else args.adaptive_pool,
+            seed=args.sampling_seed + 6, device=device,
+        )
+        sampler = adaptive = AdaptiveSampler(
+            sampler, pool, 10 if args.smoke_test else args.adaptive_n, residual_score,
+            every=2 if args.smoke_test and args.adaptive_every else args.adaptive_every,
+        )
     collocation = sampler.sample()
     print(f"collocation: {args.collocation}, {collocation.shape[0]} interior points")
     if args.dense_window is not None:
@@ -434,6 +484,11 @@ def train(args: argparse.Namespace) -> None:
         print(
             f"dense window: {n_dense_window}{approx} of them in "
             f"{args.dense_window[0]:g} < t < {args.dense_window[1]:g}"
+        )
+    if adaptive is not None:
+        print(
+            f"adaptive: +{adaptive.n_add} worst of {adaptive.pool.n} candidates every "
+            f"{adaptive.every} Adam epochs / {args.lbfgs_adaptive_every} L-BFGS steps (0 = off)"
         )
     points = sample_points(
         lower=lower,
@@ -524,8 +579,8 @@ def train(args: argparse.Namespace) -> None:
     # Kept out of `history` so its indices (and adam_steps) still mean the
     # main Adam + L-BFGS phases only.
     ic_pretrain: dict[str, list[float]] = {}
-    # History indices where L-BFGS switched to a fresh collocation set
-    # (--lbfgs-resample-every); the loss jumps there.
+    # History indices where L-BFGS switched to a fresh or refined collocation
+    # set (--lbfgs-resample-every, --lbfgs-adaptive-every); the loss jumps there.
     lbfgs_resample_steps: list[int] = []
 
     def checkpoint_extras() -> dict:
@@ -534,6 +589,9 @@ def train(args: argparse.Namespace) -> None:
             extras["ic_pretrain"] = ic_pretrain
         if lbfgs_resample_steps:
             extras["lbfgs_resample_steps"] = lbfgs_resample_steps
+        if adaptive is not None and adaptive.added is not None:
+            # Where the refinement put its points, and at which history step.
+            extras["adaptive"] = {"points": adaptive.added.cpu(), "step": adaptive.added_step.clone()}
         if layer_stats is not None:
             extras["layer_stats"] = layer_stats.as_dict()
         return extras
@@ -603,6 +661,8 @@ def train(args: argparse.Namespace) -> None:
         new_collocation = sampler.update(model, epoch + 1)
         if new_collocation is not None:
             points.collocation = with_pde_at_t0(new_collocation, points.t0_points)
+            if adaptive is not None and adaptive.every and (epoch + 1) % adaptive.every == 0:
+                print(f"[adam] epoch {epoch:5d}/{epochs} refined: {points.collocation.shape[0]} points")
 
         if scheduler is not None:
             scheduler.step(total)
@@ -648,6 +708,10 @@ def train(args: argparse.Namespace) -> None:
             lbfgs_sampler, args.collocation, lower, upper, args.dense_window, n_dense_window,
             seed=args.sampling_seed + 5, device=device,
         )
+        if adaptive is not None:
+            # Swap the base set but keep the points refinement has added.
+            adaptive.base = lbfgs_sampler
+            lbfgs_sampler = adaptive
         points.collocation = with_pde_at_t0(lbfgs_sampler.sample(), points.t0_points)
         print(f"[lbfgs] collocation: {args.collocation}, {points.collocation.shape[0]} points")
     else:
@@ -673,14 +737,23 @@ def train(args: argparse.Namespace) -> None:
     stalled = 0
     lbfgs_start = time.perf_counter()
     for lbfgs_step in range(lbfgs_steps):
-        if args.lbfgs_resample_every and lbfgs_step > 0 and lbfgs_step % args.lbfgs_resample_every == 0:
-            points.collocation = with_pde_at_t0(lbfgs_sampler.sample(), points.t0_points)
+        resample_now = args.lbfgs_resample_every and lbfgs_step > 0 and lbfgs_step % args.lbfgs_resample_every == 0
+        refine_now = (
+            args.lbfgs_adaptive_every and lbfgs_step > 0 and lbfgs_step % args.lbfgs_adaptive_every == 0
+        )
+        if resample_now or refine_now:
+            if resample_now:
+                new_collocation = lbfgs_sampler.sample()
+            if refine_now:
+                new_collocation = adaptive.refine(model, len(history["total"]))
+            points.collocation = with_pde_at_t0(new_collocation, points.t0_points)
             # A fresh optimizer: kept, the next step would pair this set's
             # gradient with the last set's into a bogus curvature update.
             lbfgs = make_lbfgs()
             best_total, stalled = None, 0
             lbfgs_resample_steps.append(len(history["total"]))
-            print(f"[lbfgs] step {lbfgs_step + 1:3d}/{lbfgs_steps} resampled {points.collocation.shape[0]} points")
+            action = " and ".join(a for a, now in (("resampled", resample_now), ("refined", refine_now)) if now)
+            print(f"[lbfgs] step {lbfgs_step + 1:3d}/{lbfgs_steps} {action}: {points.collocation.shape[0]} points")
         stats_now = layer_stats is not None and lbfgs_step % args.layer_stats_every == 0
         if stats_now:
             # The step's first closure call evaluates these same weights, so
