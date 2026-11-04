@@ -283,6 +283,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--adaptive-n", type=int, default=500, help="Points added per adaptive round")
     parser.add_argument(
+        "--adaptive-max-points",
+        type=int,
+        default=0,
+        help="Stop adaptive refinement (Adam and L-BFGS together) once this "
+        "many points have been added (0 = no cap), e.g. 2000 with "
+        "--adaptive-n 500 for four rounds.",
+    )
+    parser.add_argument(
         "--adaptive-pool", type=int, default=20000, help="Candidate points scored per adaptive round"
     )
     parser.add_argument(
@@ -491,6 +499,7 @@ def train(args: argparse.Namespace) -> None:
         sampler = adaptive = AdaptiveSampler(
             sampler, pool, 10 if args.smoke_test else args.adaptive_n, residual_score,
             every=2 if args.smoke_test and args.adaptive_every else args.adaptive_every,
+            max_points=args.adaptive_max_points,
         )
     collocation = sampler.sample()
     print(f"collocation: {args.collocation}, {collocation.shape[0]} interior points")
@@ -756,6 +765,7 @@ def train(args: argparse.Namespace) -> None:
         resample_now = args.lbfgs_resample_every and lbfgs_step > 0 and lbfgs_step % args.lbfgs_resample_every == 0
         refine_now = (
             args.lbfgs_adaptive_every and lbfgs_step > 0 and lbfgs_step % args.lbfgs_adaptive_every == 0
+            and not adaptive.full
         )
         if resample_now or refine_now:
             if resample_now:

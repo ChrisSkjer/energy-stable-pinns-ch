@@ -254,6 +254,8 @@ class AdaptiveSampler(CollocationSampler):
         score: score(model, points) -> (n,) pointwise residual to rank by.
         every: refine every this many update() steps (0 = only when
             refine() is called directly, as train.py does in L-BFGS).
+        max_points: stop adding once this many points are in (0 = no cap);
+            the last round is cut short to land exactly on it.
     """
 
     def __init__(
@@ -263,8 +265,10 @@ class AdaptiveSampler(CollocationSampler):
         n_add: int,
         score: Callable[[nn.Module, torch.Tensor], torch.Tensor],
         every: int = 0,
+        max_points: int = 0,
     ):
         self.base, self.pool, self.n_add, self.score, self.every = base, pool, n_add, score, every
+        self.max_points = max_points
         self.current: torch.Tensor | None = None
         self.added: torch.Tensor | None = None
         # Step (passed to refine) at which each added point came in.
@@ -279,12 +283,22 @@ class AdaptiveSampler(CollocationSampler):
         self.current = self.base.sample()
         return self._combined()
 
+    @property
+    def full(self) -> bool:
+        """Whether max_points have been added, so refine() would add nothing."""
+        return bool(self.max_points) and self.added_step.numel() >= self.max_points
+
     def refine(self, model: nn.Module, step: int) -> torch.Tensor:
-        """Add the n_add highest-residual points of a fresh pool draw and
-        return the new training set."""
+        """Add the n_add highest-residual points of a fresh pool draw (fewer
+        if that would pass max_points) and return the new training set."""
+        n_add = self.n_add
+        if self.max_points:
+            n_add = min(n_add, self.max_points - self.added_step.numel())
+        if n_add <= 0:
+            return self._combined()
         candidates = self.pool.sample()
         scores = self.score(model, candidates).detach().reshape(-1)
-        worst = torch.topk(scores, min(self.n_add, scores.numel())).indices
+        worst = torch.topk(scores, min(n_add, scores.numel())).indices
         chosen = candidates[worst].detach()
         self.added = chosen if self.added is None else torch.cat([self.added, chosen], dim=0)
         self.added_step = torch.cat([self.added_step, torch.full((chosen.shape[0],), step, dtype=torch.long)])
@@ -294,7 +308,7 @@ class AdaptiveSampler(CollocationSampler):
         new = self.base.update(model, step)
         if new is not None:
             self.current = new
-        if self.every and step > 0 and step % self.every == 0:
+        if self.every and step > 0 and step % self.every == 0 and not self.full:
             return self.refine(model, step)
         return None if new is None else self._combined()
 

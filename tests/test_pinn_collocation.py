@@ -187,3 +187,14 @@ def test_adaptive_points_survive_a_base_resample():
     assert resampled.shape == (110, 3)
     assert not torch.equal(resampled[:100], first)
     assert torch.equal(resampled[100:], refined[100:])
+
+
+def test_adaptive_stops_at_max_points():
+    base = make_sampler("sobol", LOWER, UPPER, 100, seed=0)
+    pool = make_sampler("sobol", LOWER, UPPER, 1000, seed=6)
+    sampler = AdaptiveSampler(base, pool, 20, _x_score, every=1, max_points=50)
+    sampler.sample()
+    sizes = [sampler.update(None, step) for step in range(1, 6)]
+    # 20 + 20 + the last 10 to land on the cap, then nothing more.
+    assert [s.shape[0] if s is not None else None for s in sizes] == [120, 140, 150, None, None]
+    assert sampler.full
