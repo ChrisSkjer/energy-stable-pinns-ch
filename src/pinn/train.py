@@ -262,8 +262,16 @@ def parse_args() -> argparse.Namespace:
         "candidate points (same random/sobol strategy, own seed) and add the "
         "--adaptive-n worst to the training set (0 = off). Added points "
         "accumulate, survive --resample-every, and carry over to L-BFGS "
-        "(also to --lbfgs-n-collocation's set). Ranked by "
-        "pde_u_weight * r_u^2 + pde_mu_weight * r_mu^2.",
+        "(also to --lbfgs-n-collocation's set). Ranked by --adaptive-score.",
+    )
+    parser.add_argument(
+        "--adaptive-score",
+        type=str,
+        default="weighted",
+        choices=("weighted", "unweighted", "u", "mu"),
+        help="Pointwise residual the adaptive candidates are ranked by: "
+        "'weighted' = pde_u_weight * r_u^2 + pde_mu_weight * r_mu^2 (as in the "
+        "loss), 'unweighted' = r_u^2 + r_mu^2, 'u' = r_u^2, 'mu' = r_mu^2.",
     )
     parser.add_argument(
         "--lbfgs-adaptive-every",
@@ -464,9 +472,16 @@ def train(args: argparse.Namespace) -> None:
     adaptive: AdaptiveSampler | None = None
     if args.adaptive_every or args.lbfgs_adaptive_every:
 
+        w_u, w_mu = {
+            "weighted": (args.pde_u_weight, args.pde_mu_weight),
+            "unweighted": (1.0, 1.0),
+            "u": (1.0, 0.0),
+            "mu": (0.0, 1.0),
+        }[args.adaptive_score]
+
         def residual_score(model: torch.nn.Module, candidates: torch.Tensor) -> torch.Tensor:
             r_u, r_mu = pde_residuals(model, candidates.detach().requires_grad_(True), epsilon=args.epsilon)
-            return args.pde_u_weight * r_u.detach() ** 2 + args.pde_mu_weight * r_mu.detach() ** 2
+            return w_u * r_u.detach() ** 2 + w_mu * r_mu.detach() ** 2
 
         # Seed +6 for the candidates: +1..+5 are taken (see below and above).
         pool = make_sampler(
@@ -488,7 +503,8 @@ def train(args: argparse.Namespace) -> None:
     if adaptive is not None:
         print(
             f"adaptive: +{adaptive.n_add} worst of {adaptive.pool.n} candidates every "
-            f"{adaptive.every} Adam epochs / {args.lbfgs_adaptive_every} L-BFGS steps (0 = off)"
+            f"{adaptive.every} Adam epochs / {args.lbfgs_adaptive_every} L-BFGS steps (0 = off), "
+            f"ranked by {args.adaptive_score} residual"
         )
     points = sample_points(
         lower=lower,
