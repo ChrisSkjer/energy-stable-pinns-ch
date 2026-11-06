@@ -30,11 +30,20 @@ from src.pinn.collocation import (
     COLLOCATION_STRATEGIES,
     RESAMPLABLE,
     AdaptiveSampler,
+    FixedSampler,
+    SobolSampler,
     heldout_points,
     make_sampler,
     with_time_window,
 )
-from src.pinn.sampling import TrainingPoints, domain_bounds, heldout_ic_bc_points, sample_points, with_pde_at_t0
+from src.pinn.sampling import (
+    TrainingPoints,
+    domain_bounds,
+    heldout_ic_bc_points,
+    ic_targets,
+    sample_points,
+    with_pde_at_t0,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -305,6 +314,33 @@ def parse_args() -> argparse.Namespace:
         "The held-out residual is a plain mean either way.",
     )
     parser.add_argument(
+        "--ic-adaptive-every",
+        type=int,
+        default=0,
+        help="Adaptive IC sampling: every this many Adam epochs, evaluate the "
+        "pointwise IC error (u(x, 0) - u0(x))^2 on --ic-adaptive-pool fresh "
+        "Sobol points on t = 0 and add the --ic-adaptive-n worst to the IC "
+        "grid (0 = off). Added points accumulate and carry over to L-BFGS.",
+    )
+    parser.add_argument(
+        "--lbfgs-ic-adaptive-every",
+        type=int,
+        default=0,
+        help="Same adaptive IC refinement every this many L-BFGS steps (0 = "
+        "off); restarts L-BFGS, like --lbfgs-adaptive-every.",
+    )
+    parser.add_argument("--ic-adaptive-n", type=int, default=500, help="IC points added per adaptive round")
+    parser.add_argument(
+        "--ic-adaptive-max-points",
+        type=int,
+        default=0,
+        help="Stop adaptive IC refinement (Adam and L-BFGS together) once this "
+        "many IC points have been added (0 = no cap).",
+    )
+    parser.add_argument(
+        "--ic-adaptive-pool", type=int, default=10000, help="Candidate IC points scored per adaptive round"
+    )
+    parser.add_argument(
         "--grid-shape",
         type=int,
         nargs="+",
@@ -545,6 +581,39 @@ def train(args: argparse.Namespace) -> None:
         ic_seed=args.ic_seed,
     )
 
+    # Adaptive IC refinement: the IC grid as a fixed base, a Sobol pool on
+    # the t = t_lo slice of the box (zero-width time axis), ranked by the
+    # pointwise IC error.
+    ic_adaptive: AdaptiveSampler | None = None
+    if args.ic_adaptive_every or args.lbfgs_ic_adaptive_every:
+
+        def ic_error_score(model: torch.nn.Module, candidates: torch.Tensor) -> torch.Tensor:
+            with torch.no_grad():
+                u = model(candidates)[:, 0:1]
+            target = ic_targets(candidates, ic=args.ic, epsilon=args.epsilon, ic_seed=args.ic_seed)
+            return (u - target) ** 2
+
+        # Seed +7 for the IC candidates: +1..+6 are taken (see above).
+        ic_pool = SobolSampler(
+            lower, (*upper[:-1], lower[-1]), 200 if args.smoke_test else args.ic_adaptive_pool,
+            seed=args.sampling_seed + 7, device=device,
+        )
+        ic_adaptive = AdaptiveSampler(
+            FixedSampler(points.ic_points), ic_pool, 10 if args.smoke_test else args.ic_adaptive_n,
+            ic_error_score,
+            every=2 if args.smoke_test and args.ic_adaptive_every else args.ic_adaptive_every,
+            max_points=args.ic_adaptive_max_points,
+        )
+        ic_adaptive.sample()
+        print(
+            f"ic adaptive: +{ic_adaptive.n_add} worst of {ic_pool.n} Sobol candidates on t = {lower[-1]:g} every "
+            f"{ic_adaptive.every} Adam epochs / {args.lbfgs_ic_adaptive_every} L-BFGS steps (0 = off)"
+        )
+
+    def set_ic_points(ic_points: torch.Tensor) -> None:
+        points.ic_points = ic_points
+        points.ic_values = ic_targets(ic_points, ic=args.ic, epsilon=args.epsilon, ic_seed=args.ic_seed)
+
     # (t_start, t_end, share of [0, t_max]) for --dense-window-reweight.
     pde_window = None
     if args.dense_window_reweight:
@@ -641,6 +710,8 @@ def train(args: argparse.Namespace) -> None:
         if adaptive is not None and adaptive.added is not None:
             # Where the refinement put its points, and at which history step.
             extras["adaptive"] = {"points": adaptive.added.cpu(), "step": adaptive.added_step.clone()}
+        if ic_adaptive is not None and ic_adaptive.added is not None:
+            extras["ic_adaptive"] = {"points": ic_adaptive.added.cpu(), "step": ic_adaptive.added_step.clone()}
         if layer_stats is not None:
             extras["layer_stats"] = layer_stats.as_dict()
         return extras
@@ -712,6 +783,11 @@ def train(args: argparse.Namespace) -> None:
             points.collocation = with_pde_at_t0(new_collocation, points.t0_points)
             if adaptive is not None and adaptive.every and (epoch + 1) % adaptive.every == 0:
                 print(f"[adam] epoch {epoch:5d}/{epochs} refined: {points.collocation.shape[0]} points")
+        if ic_adaptive is not None:
+            new_ic = ic_adaptive.update(model, epoch + 1)
+            if new_ic is not None:
+                set_ic_points(new_ic)
+                print(f"[adam] epoch {epoch:5d}/{epochs} ic refined: {points.ic_points.shape[0]} IC points")
 
         if scheduler is not None:
             scheduler.step(total)
@@ -791,19 +867,32 @@ def train(args: argparse.Namespace) -> None:
             args.lbfgs_adaptive_every and lbfgs_step > 0 and lbfgs_step % args.lbfgs_adaptive_every == 0
             and not adaptive.full
         )
-        if resample_now or refine_now:
+        refine_ic_now = (
+            args.lbfgs_ic_adaptive_every and lbfgs_step > 0 and lbfgs_step % args.lbfgs_ic_adaptive_every == 0
+            and not ic_adaptive.full
+        )
+        if resample_now or refine_now or refine_ic_now:
             if resample_now:
                 new_collocation = lbfgs_sampler.sample()
             if refine_now:
                 new_collocation = adaptive.refine(model, len(history["total"]))
-            points.collocation = with_pde_at_t0(new_collocation, points.t0_points)
+            if resample_now or refine_now:
+                points.collocation = with_pde_at_t0(new_collocation, points.t0_points)
+            if refine_ic_now:
+                set_ic_points(ic_adaptive.refine(model, len(history["total"])))
             # A fresh optimizer: kept, the next step would pair this set's
             # gradient with the last set's into a bogus curvature update.
             lbfgs = make_lbfgs()
             best_total, stalled = None, 0
             lbfgs_resample_steps.append(len(history["total"]))
-            action = " and ".join(a for a, now in (("resampled", resample_now), ("refined", refine_now)) if now)
-            print(f"[lbfgs] step {lbfgs_step + 1:3d}/{lbfgs_steps} {action}: {points.collocation.shape[0]} points")
+            action = " and ".join(
+                a for a, now in (("resampled", resample_now), ("refined", refine_now), ("ic refined", refine_ic_now))
+                if now
+            )
+            print(
+                f"[lbfgs] step {lbfgs_step + 1:3d}/{lbfgs_steps} {action}: {points.collocation.shape[0]} points, "
+                f"{points.ic_points.shape[0]} IC points"
+            )
         stats_now = layer_stats is not None and lbfgs_step % args.layer_stats_every == 0
         if stats_now:
             # The step's first closure call evaluates these same weights, so

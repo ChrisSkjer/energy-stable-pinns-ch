@@ -14,7 +14,9 @@ the residual on a candidate pool: AdaptiveSampler (Wight & Zhao 2020) wraps
 any of the strategies and adds the worst candidates to the training set.
 
 Only the interior PDE points live here; the IC and BC points stay on the
-fixed grids built in src/pinn/sampling.py.
+fixed grids built in src/pinn/sampling.py. AdaptiveSampler can also refine
+the IC points: a FixedSampler holding the IC grid as its base, a Sobol pool
+on the t = t_lo slice and the pointwise IC error as its score.
 """
 
 from __future__ import annotations
@@ -49,6 +51,17 @@ class CollocationSampler:
 
     def update(self, model: nn.Module, step: int) -> torch.Tensor | None:
         return None
+
+
+class FixedSampler(CollocationSampler):
+    """A given set of points, e.g. the IC grid as the base of an
+    AdaptiveSampler that refines the IC points."""
+
+    def __init__(self, points: torch.Tensor):
+        self.points = points
+
+    def sample(self) -> torch.Tensor:
+        return self.points
 
 
 class UniformGridSampler(CollocationSampler):
