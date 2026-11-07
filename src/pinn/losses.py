@@ -63,6 +63,38 @@ def time_binned_mean(squared: torch.Tensor, t: torch.Tensor, edges: torch.Tensor
     return torch.sum(shares / shares.sum() * sums[filled] / counts[filled])
 
 
+def space_binned_mean(values: torch.Tensor, x: torch.Tensor, bins: tuple[tuple[float, ...], tuple[float, ...], int]) -> torch.Tensor:
+    """Stratified mean of `values` over K equal cells per spatial axis
+    (K x K in 2D, K in 1D), every cell counting the same as it covers the
+    same area, however many points it holds:
+
+        mean over the non-empty cells of mean(cell).
+
+    The spatial analogue of time_binned_mean, for the IC loss: extra points
+    that cluster in space (--ic-reweight-bins with adaptive IC points) then
+    add resolution there without giving that region more weight; on the
+    uniform IC grid alone it is (about) the plain mean. Points outside the
+    box go to the edge cells.
+
+    Args:
+        values: (N, 1) or (N,) pointwise values.
+        x: (N, n_space) spatial coordinates.
+        bins: (lower, upper, K): spatial box bounds and cells per axis.
+    """
+    lower, upper, k = bins
+    lo = torch.tensor(lower, device=x.device, dtype=x.dtype)
+    hi = torch.tensor(upper, device=x.device, dtype=x.dtype)
+    cell = torch.clamp(((x - lo) / (hi - lo) * k).long(), 0, k - 1)
+    strides = k ** torch.arange(x.shape[1], device=x.device)
+    index = (cell * strides).sum(dim=1)
+    n_cells = k ** x.shape[1]
+    flat = values.reshape(-1)
+    sums = torch.zeros(n_cells, device=flat.device, dtype=flat.dtype).index_add(0, index, flat)
+    counts = torch.bincount(index, minlength=n_cells).to(flat.dtype)
+    filled = counts > 0
+    return torch.mean(sums[filled] / counts[filled])
+
+
 def pde_residual_losses(model: nn.Module, collocation_points: torch.Tensor, epsilon = DEFAULT_EPSILON, m = 1.0, window: tuple[float, float, float] | None = None, t_bins: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
     """Residuals of both equations of the Cahn-Hilliard PDE (mixed u/mu
     formulation), at collocation points, via automatic differentiation:
@@ -158,6 +190,7 @@ def ic_loss(
     model: nn.Module,
     ic_points: torch.Tensor,
     ic_values: torch.Tensor,
+    space_bins: tuple[tuple[float, ...], tuple[float, ...], int] | None = None,
 ) -> torch.Tensor:
     """Initial-condition loss.
 
@@ -168,11 +201,18 @@ def ic_loss(
             only, from `src.common.initial_conditions`. There is no
             target for mu here: its t=0 value is not free to choose, it is
             fixed by the IC through mu = f'(u0) - eps^2 * laplacian(u0).
+        space_bins: (lower, upper, K) to take both means as cell-stratified
+            means over K cells per spatial axis (see space_binned_mean), so
+            clustered adaptive IC points don't raise the term's weight;
+            None = plain means.
 
     Returns:
-        Scalar MSE of the IC term.
+        Scalar MSE of the IC term, normalised by the mean square of the IC.
     """
     u_ic = model(ic_points)[:, 0:1]
+    if space_bins is not None:
+        x = ic_points[:, :-1]
+        return space_binned_mean((u_ic - ic_values) ** 2, x, space_bins) / space_binned_mean(ic_values**2, x, space_bins)
     return torch.mean((u_ic - ic_values) ** 2)/torch.mean(ic_values**2)
 
 

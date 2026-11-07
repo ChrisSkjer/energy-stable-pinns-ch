@@ -341,6 +341,17 @@ def parse_args() -> argparse.Namespace:
         "--ic-adaptive-pool", type=int, default=10000, help="Candidate IC points scored per adaptive round"
     )
     parser.add_argument(
+        "--ic-reweight-bins",
+        type=int,
+        default=0,
+        help="Take the IC loss as the mean over K x K equal spatial cells (K "
+        "in 1D), each cell counting by its area, not its number of points (0 "
+        "= off, plain mean): the adaptive IC points then add resolution where "
+        "they cluster but no extra weight, the spatial analogue of "
+        "--adaptive-reweight-bins. Keep K <= --n-ic so every cell holds grid "
+        "points. The held-out IC loss is a plain mean either way.",
+    )
+    parser.add_argument(
         "--grid-shape",
         type=int,
         nargs="+",
@@ -454,6 +465,12 @@ def parse_args() -> argparse.Namespace:
         parser.error("--adaptive-reweight-bins needs --adaptive-every or --lbfgs-adaptive-every")
     if args.adaptive_reweight_bins and args.dense_window_reweight:
         parser.error("--adaptive-reweight-bins and --dense-window-reweight are two ways to weight the PDE loss; pick one")
+    if args.ic_reweight_bins < 0:
+        parser.error("--ic-reweight-bins must be >= 0")
+    if args.ic_reweight_bins and not (args.ic_adaptive_every or args.lbfgs_ic_adaptive_every):
+        parser.error("--ic-reweight-bins needs --ic-adaptive-every or --lbfgs-ic-adaptive-every")
+    if args.ic_reweight_bins > args.n_ic:
+        parser.error(f"--ic-reweight-bins ({args.ic_reweight_bins}) above --n-ic ({args.n_ic}) leaves cells without grid points")
     if args.dense_window is not None:
         t_start, t_end = args.dense_window
         if not 0 <= t_start < t_end <= args.t_max:
@@ -626,6 +643,13 @@ def train(args: argparse.Namespace) -> None:
         pde_t_bins = torch.linspace(lower[-1], upper[-1], args.adaptive_reweight_bins + 1, device=device)
         print(f"PDE loss reweighted over {args.adaptive_reweight_bins} time bins of {(upper[-1] - lower[-1]) / args.adaptive_reweight_bins:.4g}")
 
+    # Spatial cells for --ic-reweight-bins (smoke test: its 10 x 10 grid caps K).
+    ic_bins = None
+    if args.ic_reweight_bins:
+        k = min(args.ic_reweight_bins, n_ic)
+        ic_bins = (lower[:-1], upper[:-1], k)
+        print(f"IC loss reweighted over {k}^{len(lower) - 1} spatial cells")
+
     def compute_loss(points: TrainingPoints) -> dict[str, torch.Tensor]:
         loss_pde_u, loss_pde_mu = pde_residual_losses(
             model, points.collocation, epsilon=args.epsilon, window=pde_window, t_bins=pde_t_bins
@@ -633,7 +657,7 @@ def train(args: argparse.Namespace) -> None:
         losses = {
             "pde_u": args.pde_u_weight * loss_pde_u,
             "pde_mu": args.pde_mu_weight * loss_pde_mu,
-            "ic": args.ic_weight * ic_loss(model, points.ic_points, points.ic_values),
+            "ic": args.ic_weight * ic_loss(model, points.ic_points, points.ic_values, space_bins=ic_bins),
             "bc": args.bc_weight * bc_loss(model, points.bc_points),
         }
         if args.energy_penalty:
@@ -728,7 +752,7 @@ def train(args: argparse.Namespace) -> None:
         pretrain_start = time.perf_counter()
         for epoch in range(pretrain_epochs):
             pretrain_optimizer.zero_grad()
-            losses = {"ic": args.ic_weight * ic_loss(model, points.ic_points, points.ic_values)}
+            losses = {"ic": args.ic_weight * ic_loss(model, points.ic_points, points.ic_values, space_bins=ic_bins)}
             if args.ic_pretrain_bc:
                 losses["bc"] = args.bc_weight * bc_loss(model, points.bc_points)
             losses["total"] = sum(losses.values())
