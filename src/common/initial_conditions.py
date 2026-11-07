@@ -92,12 +92,17 @@ def two_circles(x, y, *, epsilon: float, seed: int = 0) -> np.ndarray:
 
 # --- smooth random noise -------------------------------------------------------
 _NOISE_MEAN = 0.0
-_NOISE_AMPLITUDE = 0.05
+_NOISE_AMPLITUDE = 0.05  # 1D only, see noise_1d
+# sum |a_kl| = 1 over 80 modes is a loose bound: the actual max|u - mean| is
+# only ~0.25 * amplitude (0.244 for seed 42), RMS ~0.07 * amplitude. 3.5 gives
+# max|u| ~0.85 -- clearly separated +/- regions, still inside the wells, and
+# well above the network's output scale at init.
+_NOISE_AMPLITUDE_2D = 3.5
 _NOISE_MAX_MODE = 8  # shortest wavelength 2/8 = 0.25
 
 
 def noise(x, y, *, epsilon: float = 0.0, seed: int = 0) -> np.ndarray:
-    """Small random perturbation around a uniform mixture (spinodal decomposition).
+    """Random perturbation around a uniform mixture (spinodal decomposition).
 
     u = mean + amplitude * sum_{k,l} a_kl cos(k pi x) cos(l pi y), with seeded
     random coefficients over the low modes 0 <= k, l <= _NOISE_MAX_MODE.
@@ -123,7 +128,7 @@ def noise(x, y, *, epsilon: float = 0.0, seed: int = 0) -> np.ndarray:
     cos_x = np.cos(np.pi * modes * x[..., None])  # (..., n)
     cos_y = np.cos(np.pi * modes * y[..., None])  # (..., n)
     field = np.einsum("...k,kl,...l->...", cos_x, coeffs, cos_y)
-    return _NOISE_MEAN + _NOISE_AMPLITUDE * field
+    return _NOISE_MEAN + _NOISE_AMPLITUDE_2D * field
 
 
 INITIAL_CONDITIONS: dict[str, InitialCondition] = {
@@ -204,7 +209,7 @@ def noise_1d(x, *, epsilon: float = 0.0, seed: int = 0) -> np.ndarray:
 
     u = mean + amplitude * sum_k a_k cos(k pi x), k = 1.._NOISE_MAX_MODE, with
     seeded coefficients scaled so sum |a_k| = 1. The 1D counterpart of
-    `noise`, with the same amplitude, mean and mode range: zero mean
+    `noise`, with the same mean and mode range (but its own amplitude): zero mean
     perturbation, exactly flat at the walls. `epsilon` is unused.
     """
     rng = np.random.default_rng(seed)
