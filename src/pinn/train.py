@@ -24,7 +24,8 @@ from src.pinn.losses import (
     pde_residuals,
 )
 from src.pinn.layer_stats import LayerStatsLog, update_ratios, weight_snapshot
-from src.pinn.model import PINN
+from src.pinn.ic_torch import hard_ic_kwargs
+from src.pinn.model import HARD_IC_FORMS, PINN
 from src.pinn.run_paths import checkpoints_dir_for, final_path_for, run_dir_for
 from src.pinn.collocation import (
     COLLOCATION_STRATEGIES,
@@ -173,6 +174,28 @@ def parse_args() -> argparse.Namespace:
         default=42,
         help="Random seed for --ic noise; must match the FEM --seed (default 42 "
         "on both) for a valid comparison.",
+    )
+    parser.add_argument(
+        "--hard-ic",
+        action="store_true",
+        help="Impose the IC exactly: u = u0(x) + g(t) * N(x, t) with g(0) = 0 "
+        "(see src/pinn/model.py), so there is no IC loss term (--ic-weight has "
+        "no effect). mu stays a free network output.",
+    )
+    parser.add_argument(
+        "--hard-ic-tau",
+        type=float,
+        default=0.0,
+        help="Time scale of the hard IC: g(t) = 1 - exp(-t/tau) for tau > 0, "
+        "g(t) = t / t_max for 0 (default).",
+    )
+    parser.add_argument(
+        "--hard-ic-form",
+        choices=HARD_IC_FORMS,
+        default="add",
+        help="add: u = u0 + g N. blend: u = (1 - g) u0 + g N, so kinks of u0 "
+        "(cross, two_circles, two_intervals) fade out like exp(-t/tau); needs "
+        "--hard-ic-tau > 0.",
     )
     parser.add_argument("--x-max", type=float, default=1.0, help="Domain upper bound in x (lower is 0)")
     parser.add_argument("--y-max", type=float, default=1.0, help="Domain upper bound in y (lower is 0)")
@@ -475,6 +498,19 @@ def parse_args() -> argparse.Namespace:
         t_start, t_end = args.dense_window
         if not 0 <= t_start < t_end <= args.t_max:
             parser.error(f"--dense-window needs 0 <= T_START < T_END <= --t-max ({args.t_max})")
+    if args.hard_ic_tau < 0:
+        parser.error("--hard-ic-tau must be >= 0")
+    if args.hard_ic:
+        if args.hard_ic_form == "blend" and args.hard_ic_tau == 0:
+            parser.error("--hard-ic-form blend needs --hard-ic-tau > 0")
+        for flag, value in (
+            ("--ic-pretrain-epochs", args.ic_pretrain_epochs),
+            ("--ic-adaptive-every", args.ic_adaptive_every),
+            ("--lbfgs-ic-adaptive-every", args.lbfgs_ic_adaptive_every),
+            ("--ic-reweight-bins", args.ic_reweight_bins),
+        ):
+            if value:
+                parser.error(f"{flag} has no IC loss to act on with --hard-ic")
     ics = INITIAL_CONDITIONS if args.dim == 2 else INITIAL_CONDITIONS_1D
     if args.ic is None:
         args.ic = "cross" if args.dim == 2 else "cosine"
@@ -522,7 +558,12 @@ def train(args: argparse.Namespace) -> None:
         output_dim=2,  # u (phase field) and mu (chemical potential)
         hidden_layers=args.hidden_layers,
         hidden_width=args.hidden_width,
+        **hard_ic_kwargs(vars(args)),
     ).to(device)
+    if args.hard_ic:
+        g = f"1 - exp(-t/{args.hard_ic_tau:g})" if args.hard_ic_tau else "t/t_max"
+        u = "u0 + g N" if args.hard_ic_form == "add" else "(1 - g) u0 + g N"
+        print(f"hard IC: u = {u}, g = {g}; no IC loss term")
 
     n_collocation = 100 if args.smoke_test else args.n_collocation
     n_ic = 10 if args.smoke_test else args.n_ic
@@ -657,9 +698,12 @@ def train(args: argparse.Namespace) -> None:
         losses = {
             "pde_u": args.pde_u_weight * loss_pde_u,
             "pde_mu": args.pde_mu_weight * loss_pde_mu,
-            "ic": args.ic_weight * ic_loss(model, points.ic_points, points.ic_values, space_bins=ic_bins),
-            "bc": args.bc_weight * bc_loss(model, points.bc_points),
         }
+        # With --hard-ic the IC holds by construction: the term is ~0 with no
+        # gradient, so it is left out (held-out IC still logs it as a check).
+        if not args.hard_ic:
+            losses["ic"] = args.ic_weight * ic_loss(model, points.ic_points, points.ic_values, space_bins=ic_bins)
+        losses["bc"] = args.bc_weight * bc_loss(model, points.bc_points)
         if args.energy_penalty:
             losses["energy"] = args.energy_weight * energy_stability_loss(model, points.collocation)
         losses["total"] = sum(losses.values())

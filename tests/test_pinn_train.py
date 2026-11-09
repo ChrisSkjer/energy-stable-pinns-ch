@@ -43,6 +43,27 @@ def test_parse_args_rejects_resampling_a_grid(monkeypatch):
         parse_args()
 
 
+def test_parse_args_hard_ic_checks(monkeypatch):
+    import pytest
+
+    from src.pinn.train import parse_args
+
+    for bad in (
+        ["--hard-ic", "--ic-pretrain-epochs", "100"],
+        ["--hard-ic", "--ic-adaptive-every", "100"],
+        ["--hard-ic", "--lbfgs-ic-adaptive-every", "10"],
+        ["--hard-ic", "--ic-adaptive-every", "100", "--ic-reweight-bins", "10"],
+        ["--hard-ic", "--hard-ic-form", "blend"],  # blend needs tau > 0
+        ["--hard-ic", "--hard-ic-tau", "-1"],
+    ):
+        monkeypatch.setattr("sys.argv", ["train", *bad])
+        with pytest.raises(SystemExit):
+            parse_args()
+    monkeypatch.setattr("sys.argv", ["train", "--hard-ic", "--hard-ic-form", "blend", "--hard-ic-tau", "1e-3"])
+    args = parse_args()
+    assert args.hard_ic and args.hard_ic_tau == 1e-3 and args.hard_ic_form == "blend"
+
+
 def test_parse_args_rejects_lbfgs_resampling_a_grid(monkeypatch):
     import pytest
 

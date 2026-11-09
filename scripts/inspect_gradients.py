@@ -95,9 +95,11 @@ def training_losses(
     losses = {
         "pde_u": train_args.get("pde_u_weight", 1.0) * loss_u,
         "pde_mu": train_args.get("pde_mu_weight", 1.0) * loss_mu,
-        "ic": train_args.get("ic_weight", 1.0) * ic_loss(model, points.ic_points, points.ic_values),
-        "bc": train_args.get("bc_weight", 1.0) * bc_loss(model, points.bc_points),
     }
+    # --hard-ic runs have no IC term (it is ~0 with no gradient by construction).
+    if not train_args.get("hard_ic", False):
+        losses["ic"] = train_args.get("ic_weight", 1.0) * ic_loss(model, points.ic_points, points.ic_values)
+    losses["bc"] = train_args.get("bc_weight", 1.0) * bc_loss(model, points.bc_points)
     return losses, points.collocation
 
 

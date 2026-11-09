@@ -14,6 +14,7 @@ import warnings
 import numpy as np
 import torch
 
+from src.pinn.ic_torch import hard_ic_kwargs
 from src.pinn.model import PINN
 from src.pinn.run_paths import infer_run_dir
 from src.pinn.sampling import domain_bounds
@@ -88,6 +89,7 @@ def load_model(checkpoint_path: str, device: torch.device | str = "cpu") -> PINN
         output_dim=2,  # u (phase field) and mu (chemical potential), matching train.py
         hidden_layers=train_args["hidden_layers"],
         hidden_width=train_args["hidden_width"],
+        **hard_ic_kwargs(train_args),  # --hard-ic runs; {} otherwise
     ).to(device)
     model.load_state_dict(checkpoint["model_state"])
     model.eval()

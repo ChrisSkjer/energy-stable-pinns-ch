@@ -11,7 +11,7 @@ from typing import Any, Mapping
 
 _RUN_SUMMARY_GROUPS: list[tuple[str, tuple[str, ...]]] = [
     ("network", ("hidden_layers", "hidden_width", "weight_seed")),
-    ("domain", ("dim", "x_max", "y_max", "t_max", "epsilon", "ic", "ic_seed")),
+    ("domain", ("dim", "x_max", "y_max", "t_max", "epsilon", "ic", "ic_seed", "hard_ic", "hard_ic_tau", "hard_ic_form")),
     (
         "sampling",
         (

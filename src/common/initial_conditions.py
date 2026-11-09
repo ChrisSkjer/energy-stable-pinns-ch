@@ -101,6 +101,19 @@ _NOISE_AMPLITUDE_2D = 3.5
 _NOISE_MAX_MODE = 8  # shortest wavelength 2/8 = 0.25
 
 
+def noise_coefficients(seed: int) -> np.ndarray:
+    """(n, n) mode coefficients a_kl of `noise`, n = _NOISE_MAX_MODE + 1:
+    seeded uniform in [-1, 1], (0, 0) mode dropped, scaled to sum |a_kl| = 1.
+    Shared with the torch port (src/pinn/ic_torch.py) so both evaluate the
+    same field."""
+    rng = np.random.default_rng(seed)
+    n = _NOISE_MAX_MODE + 1
+    coeffs = rng.uniform(-1.0, 1.0, size=(n, n))
+    coeffs[0, 0] = 0.0
+    coeffs /= np.abs(coeffs).sum()
+    return coeffs
+
+
 def noise(x, y, *, epsilon: float = 0.0, seed: int = 0) -> np.ndarray:
     """Random perturbation around a uniform mixture (spinodal decomposition).
 
@@ -116,11 +129,8 @@ def noise(x, y, *, epsilon: float = 0.0, seed: int = 0) -> np.ndarray:
 
     `epsilon` is unused: there is no interface yet.
     """
-    rng = np.random.default_rng(seed)
-    n = _NOISE_MAX_MODE + 1
-    coeffs = rng.uniform(-1.0, 1.0, size=(n, n))
-    coeffs[0, 0] = 0.0
-    coeffs /= np.abs(coeffs).sum()
+    coeffs = noise_coefficients(seed)
+    n = coeffs.shape[0]
 
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
@@ -204,6 +214,16 @@ def two_intervals(x, *, epsilon: float, seed: int = 0) -> np.ndarray:
     return _tanh_profile(sdf, epsilon)
 
 
+def noise_1d_coefficients(seed: int) -> np.ndarray:
+    """(_NOISE_MAX_MODE,) coefficients a_k of `noise_1d` for modes
+    k = 1.._NOISE_MAX_MODE, scaled to sum |a_k| = 1. Shared with the torch
+    port (src/pinn/ic_torch.py)."""
+    rng = np.random.default_rng(seed)
+    coeffs = rng.uniform(-1.0, 1.0, size=_NOISE_MAX_MODE)
+    coeffs /= np.abs(coeffs).sum()
+    return coeffs
+
+
 def noise_1d(x, *, epsilon: float = 0.0, seed: int = 0) -> np.ndarray:
     """Small random perturbation around a uniform mixture (spinodal decomposition).
 
@@ -212,9 +232,7 @@ def noise_1d(x, *, epsilon: float = 0.0, seed: int = 0) -> np.ndarray:
     `noise`, with the same mean and mode range (but its own amplitude): zero mean
     perturbation, exactly flat at the walls. `epsilon` is unused.
     """
-    rng = np.random.default_rng(seed)
-    coeffs = rng.uniform(-1.0, 1.0, size=_NOISE_MAX_MODE)
-    coeffs /= np.abs(coeffs).sum()
+    coeffs = noise_1d_coefficients(seed)
     x = np.asarray(x, dtype=float)
     modes = np.arange(1, _NOISE_MAX_MODE + 1)
     field = np.cos(np.pi * modes * x[..., None]) @ coeffs

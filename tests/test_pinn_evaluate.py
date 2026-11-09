@@ -78,6 +78,29 @@ def test_load_model_restores_architecture_bounds_and_weights(tmp_path):
     assert loaded(points).shape == (20, 2)
 
 
+def test_load_model_rebuilds_the_hard_ic(tmp_path):
+    from src.pinn.ic_torch import InitialConditionField
+
+    torch.manual_seed(0)
+    model = PINN(
+        lower_bound=(0.0, 0.0), upper_bound=(1.0, 0.01), input_dim=2, output_dim=2,
+        hidden_layers=2, hidden_width=8,
+        hard_ic=InitialConditionField(1, "cosine", 0.05), hard_ic_tau=1e-3, hard_ic_form="blend",
+    )
+    args = {
+        "dim": 1, "x_max": 1.0, "y_max": 1.0, "t_max": 0.01, "hidden_layers": 2, "hidden_width": 8,
+        "ic": "cosine", "ic_seed": 0, "epsilon": 0.05,
+        "hard_ic": True, "hard_ic_tau": 1e-3, "hard_ic_form": "blend",
+    }
+    torch.save({"model_state": model.state_dict(), "args": args, "history": {}}, tmp_path / "final.pt")
+
+    loaded = load_model(str(tmp_path / "final.pt"))
+    assert loaded.hard_ic is not None and loaded.hard_ic_form == "blend"
+    points = torch.rand(20, 2) * torch.tensor([1.0, 0.01])
+    with torch.no_grad():
+        torch.testing.assert_close(loaded(points), model(points))
+
+
 def test_save_evaluation_round_trip(tmp_path):
     X, Y, U, MU = evaluate_over_time(_Analytic(), np.array([0.0, 0.005]), nx=4, ny=3)
     path = tmp_path / "sub" / "evaluation.npz"
