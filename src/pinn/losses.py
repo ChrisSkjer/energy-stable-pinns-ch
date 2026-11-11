@@ -54,7 +54,7 @@ def time_binned_mean(squared: torch.Tensor, t: torch.Tensor, edges: torch.Tensor
     """
     edges = edges.to(t.device, t.dtype)
     n_bins = edges.numel() - 1
-    index = torch.bucketize(t.reshape(-1), edges[1:-1], right=True)
+    index = torch.bucketize(t.reshape(-1).contiguous(), edges[1:-1], right=True)
     flat = squared.reshape(-1)
     sums = torch.zeros(n_bins, device=flat.device, dtype=flat.dtype).index_add(0, index, flat)
     counts = torch.bincount(index, minlength=n_bins).to(flat.dtype)

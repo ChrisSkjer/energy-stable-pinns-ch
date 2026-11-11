@@ -24,6 +24,7 @@ from src.pinn.losses import (
     ic_squared_errors,
     pde_residual_losses,
     pde_residuals,
+    time_binned_mean,
 )
 from src.pinn.layer_stats import LayerStatsLog, update_ratios, weight_snapshot
 from src.pinn.ic_torch import hard_ic_kwargs
@@ -386,8 +387,9 @@ def parse_args() -> argparse.Namespace:
         "these loss terms: each training point gets a trainable lambda, the "
         "term becomes mean(m(lambda) * r^2) (times its --*-weight), and the "
         "lambdas are trained by gradient *ascent* during Adam, then frozen "
-        "for L-BFGS. The term's points must stay fixed, so resampling and "
-        "adaptive refinement of them are not allowed. History logs the plain "
+        "for L-BFGS. The term's points must stay fixed, so resampling them is "
+        "not allowed; adaptive refinement is (new points get the mean lambda), "
+        "and so is --adaptive-reweight-bins. History logs the plain "
         "term under its name and the weighted one under sa_<term>.",
     )
     parser.add_argument(
@@ -565,10 +567,7 @@ def parse_args() -> argparse.Namespace:
             ("--resample-every", args.resample_every),
             ("--lbfgs-resample-every", args.lbfgs_resample_every),
             ("--lbfgs-n-collocation", args.lbfgs_n_collocation),
-            ("--adaptive-every", args.adaptive_every),
-            ("--lbfgs-adaptive-every", args.lbfgs_adaptive_every),
             ("--dense-window-reweight", args.dense_window_reweight),
-            ("--adaptive-reweight-bins", args.adaptive_reweight_bins),
         ):
             if value:
                 parser.error(f"{flag} changes or reweights the PDE points; not with --sa-terms {' '.join(sa_pde)}")
@@ -781,18 +780,39 @@ def train(args: argparse.Namespace) -> None:
         )
         optimizer_cls = torch.optim.Adam if args.sa_optimizer == "adam" else torch.optim.SGD
         sa_optimizer = optimizer_cls(sa.parameters(), lr=args.sa_lr, maximize=True)
+        sa_optimizer_cls = optimizer_cls
         mask_desc = f"lambda^{args.sa_mask_q:g}" if args.sa_mask == "polynomial" else f"{args.sa_mask_scale:g} sigmoid(lambda)"
         print(
             f"self-adaptive weights on {', '.join(args.sa_terms)}: m = {mask_desc}, "
             f"{args.sa_optimizer} ascent at lr {args.sa_lr:g} during Adam, frozen in L-BFGS"
         )
 
+    def set_collocation(new_collocation: torch.Tensor) -> None:
+        """Swap in a refined collocation set. Refinement only appends points
+        after the old interior ones (before the t = 0 PDE points), so with
+        self-adaptive PDE terms the new points get new lambdas there."""
+        nonlocal sa_optimizer
+        n_old = points.collocation.shape[0]
+        points.collocation = with_pde_at_t0(new_collocation, points.t0_points)
+        n_new = points.collocation.shape[0] - n_old
+        if sa is not None and n_new and ("pde_u" in sa or "pde_mu" in sa):
+            index = n_old - points.t0_points.shape[0]
+            for term in ("pde_u", "pde_mu"):
+                sa.insert(term, index, n_new)
+            if sa_optimizer is not None:
+                # New Parameters: a fresh optimiser (its moments are lost).
+                sa_optimizer = sa_optimizer_cls(sa.parameters(), lr=args.sa_lr, maximize=True)
+
     def compute_loss(points: TrainingPoints) -> dict[str, torch.Tensor]:
         if sa is not None and ("pde_u" in sa or "pde_mu" in sa):
             r_u, r_mu = pde_residuals(model, points.collocation, epsilon=args.epsilon)
+            mean = torch.mean
+            if pde_t_bins is not None:
+                t = points.collocation[:, -1:]
+                mean = lambda values: time_binned_mean(values, t, pde_t_bins)  # noqa: E731
             losses = {
-                "pde_u": sa.term("pde_u", r_u**2, args.pde_u_weight),
-                "pde_mu": sa.term("pde_mu", r_mu**2, args.pde_mu_weight),
+                "pde_u": sa.term("pde_u", r_u**2, args.pde_u_weight, mean),
+                "pde_mu": sa.term("pde_mu", r_mu**2, args.pde_mu_weight, mean),
             }
         else:
             loss_pde_u, loss_pde_mu = pde_residual_losses(
@@ -973,7 +993,7 @@ def train(args: argparse.Namespace) -> None:
 
         new_collocation = sampler.update(model, epoch + 1)
         if new_collocation is not None:
-            points.collocation = with_pde_at_t0(new_collocation, points.t0_points)
+            set_collocation(new_collocation)
             if adaptive is not None and adaptive.every and (epoch + 1) % adaptive.every == 0:
                 print(f"[adam] epoch {epoch:5d}/{epochs} refined: {points.collocation.shape[0]} points")
         if ic_adaptive is not None:
@@ -1037,6 +1057,7 @@ def train(args: argparse.Namespace) -> None:
 
     if sa is not None:
         sa.freeze()
+        sa_optimizer = None
         weights = sa.as_dict()
         print("[lbfgs] self-adaptive weights frozen: " + ", ".join(
             f"{name} m in [{w.min().item():.3g}, {w.max().item():.3g}], mean {w.mean().item():.3g}"
@@ -1078,7 +1099,7 @@ def train(args: argparse.Namespace) -> None:
             if refine_now:
                 new_collocation = adaptive.refine(model, len(history["total"]))
             if resample_now or refine_now:
-                points.collocation = with_pde_at_t0(new_collocation, points.t0_points)
+                set_collocation(new_collocation)
             if refine_ic_now:
                 set_ic_points(ic_adaptive.refine(model, len(history["total"])))
             # A fresh optimizer: kept, the next step would pair this set's

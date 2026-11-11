@@ -17,13 +17,16 @@ bounded:
 lambda_0 defaults to the value where m(lambda_0) = 1, so a run starts from
 the same loss as the plain run and the --*-weight factors keep their meaning.
 
-The lambdas belong to fixed point sets: train.py rejects resampling and
-adaptive refinement of a term's points while that term is self-adaptive.
+The lambdas belong to fixed point sets: train.py rejects resampling a
+term's points while that term is self-adaptive. Adaptive refinement only
+adds points, so `insert` gives each new point the mean lambda of its term
+and the rest keep theirs.
 """
 
 from __future__ import annotations
 
 import math
+from typing import Callable
 
 import torch
 from torch import nn
@@ -92,11 +95,18 @@ class SelfAdaptiveWeights(nn.Module):
             return None
         return mask(self.lambdas[name], self.kind, self.q, self.scale)
 
-    def term(self, name: str, squared: torch.Tensor, scale: float | torch.Tensor = 1.0) -> torch.Tensor:
+    def term(
+        self,
+        name: str,
+        squared: torch.Tensor,
+        scale: float | torch.Tensor = 1.0,
+        mean: Callable[[torch.Tensor], torch.Tensor] = torch.mean,
+    ) -> torch.Tensor:
         """scale * mean(m(lambda) * squared) for a self-adaptive term (and
         scale * mean(squared) stored in `self.plain[name]`); the plain
-        scale * mean(squared) for any other term."""
-        plain = scale * torch.mean(squared)
+        scale * mean(squared) for any other term. `mean` maps (N, 1) pointwise
+        values to a scalar, e.g. a time-binned mean (--adaptive-reweight-bins)."""
+        plain = scale * mean(squared)
         w = self.weights(name)
         if w is None:
             return plain
@@ -106,7 +116,19 @@ class SelfAdaptiveWeights(nn.Module):
                 "its points must stay fixed while it is self-adaptive"
             )
         self.plain[name] = plain.detach()
-        return scale * torch.mean(w * squared.reshape(w.shape))
+        return scale * mean(w * squared.reshape(w.shape))
+
+    def insert(self, name: str, index: int, n: int) -> None:
+        """Insert n new lambdas at row `index` of a term (for points adaptive
+        refinement added there), each at the term's mean lambda. Replaces the
+        Parameter, so an optimiser over `parameters()` must be rebuilt."""
+        if name not in self.lambdas or n <= 0:
+            return
+        old = self.lambdas[name].detach()
+        new = torch.full((n, 1), old.mean().item(), device=old.device, dtype=old.dtype)
+        lam = nn.Parameter(torch.cat([old[:index], new, old[index:]]))
+        lam.requires_grad_(self.lambdas[name].requires_grad)
+        self.lambdas[name] = lam
 
     def freeze(self) -> None:
         """Stop training the lambdas (the L-BFGS phase)."""

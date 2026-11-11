@@ -73,7 +73,6 @@ def test_parse_args_rejects_moving_points_of_a_self_adaptive_term(monkeypatch):
     for bad in (
         ["--sa-terms", "pde_u", "--resample-every", "10"],
         ["--sa-terms", "pde_mu", "--lbfgs-n-collocation", "100"],
-        ["--sa-terms", "pde_u", "--collocation", "sobol", "--adaptive-every", "10"],
         ["--sa-terms", "ic", "--hard-ic"],
         ["--sa-terms", "ic", "--ic-adaptive-every", "10"],
         ["--sa-terms", "ic", "--sa-mask", "sigmoid", "--sa-mask-scale", "1"],
@@ -113,3 +112,45 @@ def test_smoke_run_trains_lambdas_in_adam_and_freezes_them_in_lbfgs(monkeypatch,
     history = final["history"]
     assert {"sa_ic", "sa_pde_u", "ic", "pde_u", "total"} <= set(history)
     assert "sa_pde_mu" not in history
+
+
+def test_insert_gives_new_points_the_mean_lambda_in_place():
+    sa = SelfAdaptiveWeights({"pde_u": 3})
+    with torch.no_grad():
+        sa.lambdas["pde_u"].copy_(torch.tensor([[1.0], [2.0], [3.0]]))
+    sa.insert("pde_u", 2, 2)  # before the last row (e.g. the t = 0 points)
+    assert sa.lambdas["pde_u"].squeeze().tolist() == [1.0, 2.0, 2.0, 2.0, 3.0]
+    assert sa.lambdas["pde_u"].requires_grad
+    sa.freeze()
+    sa.insert("pde_u", 5, 1)
+    assert not sa.lambdas["pde_u"].requires_grad and sa.lambdas["pde_u"].shape[0] == 6
+
+
+def test_term_takes_a_custom_mean():
+    sa = SelfAdaptiveWeights({"pde_u": 4})
+    squared = torch.tensor([[1.0], [2.0], [3.0], [4.0]])
+    out = sa.term("pde_u", squared, 2.0, mean=lambda v: v[:2].mean())
+    torch.testing.assert_close(out, torch.tensor(3.0))
+    torch.testing.assert_close(sa.plain["pde_u"], torch.tensor(3.0))
+
+
+def test_smoke_run_with_sa_pde_and_adaptive_refinement(monkeypatch, tmp_path):
+    from src.pinn import train as train_module
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "train", "--smoke-test", "--device", "cpu", "--run-name", "saad", "--no-heldout",
+            "--collocation", "sobol", "--adaptive-every", "2", "--lbfgs-adaptive-every", "1",
+            "--adaptive-reweight-bins", "4", "--pde-at-t0", "5",
+            "--sa-terms", "pde_u", "pde_mu", "--sa-mask", "sigmoid", "--sa-lr", "0.1",
+        ],
+    )
+    train_module.train(train_module.parse_args())
+    final = torch.load(os.path.join("results", "pinn_models", "saad", "final.pt"), weights_only=False)
+    for term in ("pde_u", "pde_mu"):
+        w, p = final["sa"][term]["weights"], final["sa"][term]["points"]
+        assert w.shape[0] == p.shape[0] > 100 + 5  # refinement added points
+    added = final["adaptive"]["points"].shape[0]
+    assert final["sa"]["pde_u"]["points"].shape[0] == 100 + added + 5
