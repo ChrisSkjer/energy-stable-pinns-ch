@@ -18,14 +18,17 @@ from src.common.initial_conditions import INITIAL_CONDITIONS, INITIAL_CONDITIONS
 from src.pinn.losses import (
     DEFAULT_EPSILON,
     bc_loss,
+    bc_squared_normals,
     energy_stability_loss,
     ic_loss,
+    ic_squared_errors,
     pde_residual_losses,
     pde_residuals,
 )
 from src.pinn.layer_stats import LayerStatsLog, update_ratios, weight_snapshot
 from src.pinn.ic_torch import hard_ic_kwargs
 from src.pinn.model import HARD_IC_FORMS, PINN
+from src.pinn.self_adaptive import SA_MASKS, SA_TERMS, SelfAdaptiveWeights
 from src.pinn.run_paths import checkpoints_dir_for, final_path_for, run_dir_for
 from src.pinn.collocation import (
     COLLOCATION_STRATEGIES,
@@ -375,6 +378,51 @@ def parse_args() -> argparse.Namespace:
         "points. The held-out IC loss is a plain mean either way.",
     )
     parser.add_argument(
+        "--sa-terms",
+        nargs="+",
+        default=[],
+        choices=SA_TERMS,
+        help="Self-adaptive point weights (SA-PINN, McClenny & Braga-Neto) on "
+        "these loss terms: each training point gets a trainable lambda, the "
+        "term becomes mean(m(lambda) * r^2) (times its --*-weight), and the "
+        "lambdas are trained by gradient *ascent* during Adam, then frozen "
+        "for L-BFGS. The term's points must stay fixed, so resampling and "
+        "adaptive refinement of them are not allowed. History logs the plain "
+        "term under its name and the weighted one under sa_<term>.",
+    )
+    parser.add_argument(
+        "--sa-mask",
+        default="polynomial",
+        choices=SA_MASKS,
+        help="Mask m(lambda): polynomial = lambda^q (unbounded), sigmoid = "
+        "s * sigmoid(lambda) (bounded by s).",
+    )
+    parser.add_argument("--sa-mask-q", type=float, default=2.0, help="Exponent q of the polynomial mask")
+    parser.add_argument(
+        "--sa-mask-scale", type=float, default=10.0, help="Cap s of the sigmoid mask (must be > 1)"
+    )
+    parser.add_argument(
+        "--sa-init",
+        type=float,
+        default=None,
+        help="Initial lambda for every point. Default: the lambda with m = 1 "
+        "(1 for polynomial, logit(1/s) for sigmoid), so training starts from "
+        "the plain loss.",
+    )
+    parser.add_argument(
+        "--sa-lr", type=float, default=None, help="Learning rate of the lambda optimiser (default: --lr)"
+    )
+    parser.add_argument(
+        "--sa-optimizer",
+        default="adam",
+        choices=("adam", "sgd"),
+        help="Optimiser for the lambdas (gradient ascent). Adam normalises "
+        "each lambda's step, and since dL/dlambda >= 0 always, every lambda "
+        "then grows at about --sa-lr per epoch whatever its residual; sgd "
+        "keeps steps proportional to the residual but needs a --sa-lr matched "
+        "to the term's scale (gradient is weight * m'(lambda) * r^2 / N).",
+    )
+    parser.add_argument(
         "--grid-shape",
         type=int,
         nargs="+",
@@ -511,6 +559,32 @@ def parse_args() -> argparse.Namespace:
         ):
             if value:
                 parser.error(f"{flag} has no IC loss to act on with --hard-ic")
+    sa_pde = [t for t in args.sa_terms if t in ("pde_u", "pde_mu")]
+    if sa_pde:
+        for flag, value in (
+            ("--resample-every", args.resample_every),
+            ("--lbfgs-resample-every", args.lbfgs_resample_every),
+            ("--lbfgs-n-collocation", args.lbfgs_n_collocation),
+            ("--adaptive-every", args.adaptive_every),
+            ("--lbfgs-adaptive-every", args.lbfgs_adaptive_every),
+            ("--dense-window-reweight", args.dense_window_reweight),
+            ("--adaptive-reweight-bins", args.adaptive_reweight_bins),
+        ):
+            if value:
+                parser.error(f"{flag} changes or reweights the PDE points; not with --sa-terms {' '.join(sa_pde)}")
+    if "ic" in args.sa_terms:
+        for flag, value in (
+            ("--hard-ic", args.hard_ic),
+            ("--ic-adaptive-every", args.ic_adaptive_every),
+            ("--lbfgs-ic-adaptive-every", args.lbfgs_ic_adaptive_every),
+            ("--ic-reweight-bins", args.ic_reweight_bins),
+        ):
+            if value:
+                parser.error(f"{flag} changes, reweights or removes the IC points; not with --sa-terms ic")
+    if args.sa_terms and args.sa_mask == "sigmoid" and args.sa_mask_scale <= 1:
+        parser.error("--sa-mask-scale must be > 1")
+    if args.sa_lr is None:
+        args.sa_lr = args.lr
     ics = INITIAL_CONDITIONS if args.dim == 2 else INITIAL_CONDITIONS_1D
     if args.ic is None:
         args.ic = "cross" if args.dim == 2 else "cosine"
@@ -691,19 +765,55 @@ def train(args: argparse.Namespace) -> None:
         ic_bins = (lower[:-1], upper[:-1], k)
         print(f"IC loss reweighted over {k}^{len(lower) - 1} spatial cells")
 
-    def compute_loss(points: TrainingPoints) -> dict[str, torch.Tensor]:
-        loss_pde_u, loss_pde_mu = pde_residual_losses(
-            model, points.collocation, epsilon=args.epsilon, window=pde_window, t_bins=pde_t_bins
-        )
-        losses = {
-            "pde_u": args.pde_u_weight * loss_pde_u,
-            "pde_mu": args.pde_mu_weight * loss_pde_mu,
+    # --sa-terms: one trainable lambda per point of each self-adaptive term.
+    sa: SelfAdaptiveWeights | None = None
+    sa_optimizer: torch.optim.Optimizer | None = None
+    if args.sa_terms:
+        n_points = {
+            "pde_u": points.collocation.shape[0],
+            "pde_mu": points.collocation.shape[0],
+            "ic": points.ic_points.shape[0],
+            "bc": points.bc_points.shape[0],
         }
+        sa = SelfAdaptiveWeights(
+            {term: n_points[term] for term in args.sa_terms},
+            kind=args.sa_mask, q=args.sa_mask_q, scale=args.sa_mask_scale, init=args.sa_init, device=device,
+        )
+        optimizer_cls = torch.optim.Adam if args.sa_optimizer == "adam" else torch.optim.SGD
+        sa_optimizer = optimizer_cls(sa.parameters(), lr=args.sa_lr, maximize=True)
+        mask_desc = f"lambda^{args.sa_mask_q:g}" if args.sa_mask == "polynomial" else f"{args.sa_mask_scale:g} sigmoid(lambda)"
+        print(
+            f"self-adaptive weights on {', '.join(args.sa_terms)}: m = {mask_desc}, "
+            f"{args.sa_optimizer} ascent at lr {args.sa_lr:g} during Adam, frozen in L-BFGS"
+        )
+
+    def compute_loss(points: TrainingPoints) -> dict[str, torch.Tensor]:
+        if sa is not None and ("pde_u" in sa or "pde_mu" in sa):
+            r_u, r_mu = pde_residuals(model, points.collocation, epsilon=args.epsilon)
+            losses = {
+                "pde_u": sa.term("pde_u", r_u**2, args.pde_u_weight),
+                "pde_mu": sa.term("pde_mu", r_mu**2, args.pde_mu_weight),
+            }
+        else:
+            loss_pde_u, loss_pde_mu = pde_residual_losses(
+                model, points.collocation, epsilon=args.epsilon, window=pde_window, t_bins=pde_t_bins
+            )
+            losses = {
+                "pde_u": args.pde_u_weight * loss_pde_u,
+                "pde_mu": args.pde_mu_weight * loss_pde_mu,
+            }
         # With --hard-ic the IC holds by construction: the term is ~0 with no
         # gradient, so it is left out (held-out IC still logs it as a check).
         if not args.hard_ic:
-            losses["ic"] = args.ic_weight * ic_loss(model, points.ic_points, points.ic_values, space_bins=ic_bins)
-        losses["bc"] = args.bc_weight * bc_loss(model, points.bc_points)
+            if sa is not None and "ic" in sa:
+                squared = ic_squared_errors(model, points.ic_points, points.ic_values)
+                losses["ic"] = sa.term("ic", squared, args.ic_weight / torch.mean(points.ic_values**2))
+            else:
+                losses["ic"] = args.ic_weight * ic_loss(model, points.ic_points, points.ic_values, space_bins=ic_bins)
+        if sa is not None and "bc" in sa:
+            losses["bc"] = sa.term("bc", bc_squared_normals(model, points.bc_points), args.bc_weight)
+        else:
+            losses["bc"] = args.bc_weight * bc_loss(model, points.bc_points)
         if args.energy_penalty:
             losses["energy"] = args.energy_weight * energy_stability_loss(model, points.collocation)
         losses["total"] = sum(losses.values())
@@ -729,6 +839,11 @@ def train(args: argparse.Namespace) -> None:
 
     def record(losses: dict[str, torch.Tensor]) -> None:
         for name, value in losses.items():
+            if sa is not None and name in sa:
+                # The plain term under its own name, comparable with runs
+                # without --sa-terms; the optimised one under sa_<name>.
+                history.setdefault(f"sa_{name}", []).append(value.item())
+                value = sa.plain[name]
             history.setdefault(name, []).append(value.item())
 
     # Unweighted PDE residuals and IC/BC losses on fixed fresh points,
@@ -782,6 +897,12 @@ def train(args: argparse.Namespace) -> None:
             extras["ic_adaptive"] = {"points": ic_adaptive.added.cpu(), "step": ic_adaptive.added_step.clone()}
         if layer_stats is not None:
             extras["layer_stats"] = layer_stats.as_dict()
+        if sa is not None:
+            # m(lambda) per term with the points it belongs to.
+            term_points = {"pde_u": points.collocation, "pde_mu": points.collocation, "ic": points.ic_points, "bc": points.bc_points}
+            extras["sa"] = {
+                name: {"weights": w, "points": term_points[name].detach().cpu()} for name, w in sa.as_dict().items()
+            }
         return extras
 
     def activation_points() -> torch.Tensor:
@@ -817,6 +938,8 @@ def train(args: argparse.Namespace) -> None:
             epoch % args.layer_stats_every == 0 or epoch == epochs - 1
         )
         optimizer.zero_grad()
+        if sa_optimizer is not None:
+            sa_optimizer.zero_grad()
         losses = compute_loss(points)
         if stats_now:
             # Index of this epoch's entry in history: the stats belong to the
@@ -829,6 +952,8 @@ def train(args: argparse.Namespace) -> None:
         if args.adam_patience:
             pre_step_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
         optimizer.step()
+        if sa_optimizer is not None:
+            sa_optimizer.step()
         if stats_now:
             layer_stats.add_update_ratio(update_ratios(model, weights_before))
         record(losses)
@@ -909,6 +1034,14 @@ def train(args: argparse.Namespace) -> None:
         print(f"[lbfgs] collocation: {args.collocation}, {points.collocation.shape[0]} points")
     else:
         lbfgs_sampler = sampler
+
+    if sa is not None:
+        sa.freeze()
+        weights = sa.as_dict()
+        print("[lbfgs] self-adaptive weights frozen: " + ", ".join(
+            f"{name} m in [{w.min().item():.3g}, {w.max().item():.3g}], mean {w.mean().item():.3g}"
+            for name, w in weights.items()
+        ))
 
     def make_lbfgs() -> torch.optim.LBFGS:
         return torch.optim.LBFGS(model.parameters(), lr=1.0, max_iter=20, line_search_fn="strong_wolfe")

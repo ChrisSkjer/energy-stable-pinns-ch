@@ -209,11 +209,17 @@ def ic_loss(
     Returns:
         Scalar MSE of the IC term, normalised by the mean square of the IC.
     """
-    u_ic = model(ic_points)[:, 0:1]
+    squared = ic_squared_errors(model, ic_points, ic_values)
     if space_bins is not None:
         x = ic_points[:, :-1]
-        return space_binned_mean((u_ic - ic_values) ** 2, x, space_bins) / space_binned_mean(ic_values**2, x, space_bins)
-    return torch.mean((u_ic - ic_values) ** 2)/torch.mean(ic_values**2)
+        return space_binned_mean(squared, x, space_bins) / space_binned_mean(ic_values**2, x, space_bins)
+    return torch.mean(squared)/torch.mean(ic_values**2)
+
+
+def ic_squared_errors(model: nn.Module, ic_points: torch.Tensor, ic_values: torch.Tensor) -> torch.Tensor:
+    """Pointwise (N_ic, 1) (u(x, 0) - u0(x))^2 behind `ic_loss` (before its
+    normalisation by mean(u0^2)), e.g. for self-adaptive point weights."""
+    return (model(ic_points)[:, 0:1] - ic_values) ** 2
 
 
 def bc_loss(model: nn.Module, bc_points: torch.Tensor) -> torch.Tensor:
@@ -230,6 +236,13 @@ def bc_loss(model: nn.Module, bc_points: torch.Tensor) -> torch.Tensor:
     Returns:
         Scalar MSE of the BC term.
     """
+    return torch.mean(bc_squared_normals(model, bc_points))
+
+
+def bc_squared_normals(model: nn.Module, bc_points: torch.Tensor) -> torch.Tensor:
+    """Pointwise (N_bc, 1) (du/dn)^2 + (dmu/dn)^2 behind `bc_loss` (whose
+    mean it is), e.g. for self-adaptive point weights. `bc_points` as in
+    `bc_loss`, with requires_grad=True."""
     out_bc = model(bc_points)
     u_bc, mu_bc = out_bc[:,0:1], out_bc[:,1:2]
     grad_u_bc = torch.autograd.grad(u_bc, bc_points, grad_outputs=torch.ones_like(u_bc), create_graph=True)[0]
@@ -240,7 +253,7 @@ def bc_loss(model: nn.Module, bc_points: torch.Tensor) -> torch.Tensor:
     du_dn = torch.cat([grad_u_bc[k*n_edge:(k+1)*n_edge, k//2:k//2+1] for k in range(n_walls)], dim=0)
     dmu_dn = torch.cat([grad_mu_bc[k*n_edge:(k+1)*n_edge, k//2:k//2+1] for k in range(n_walls)], dim=0)
 
-    return torch.mean(du_dn**2) + torch.mean(dmu_dn**2)
+    return du_dn**2 + dmu_dn**2
 
 
 def energy_stability_loss(model: nn.Module, collocation_points: torch.Tensor) -> torch.Tensor:

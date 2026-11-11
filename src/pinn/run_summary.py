@@ -54,6 +54,10 @@ _RUN_SUMMARY_GROUPS: list[tuple[str, tuple[str, ...]]] = [
         # pde_weight is kept for checkpoints from before the PDE u/mu split.
         ("pde_weight", "pde_u_weight", "pde_mu_weight", "ic_weight", "bc_weight", "energy_penalty", "energy_weight"),
     ),
+    (
+        "self-adaptive weights",
+        ("sa_terms", "sa_mask", "sa_mask_q", "sa_mask_scale", "sa_init", "sa_lr", "sa_optimizer"),
+    ),
 ]
 
 # Bookkeeping/control flags that don't describe the model or the loss --
