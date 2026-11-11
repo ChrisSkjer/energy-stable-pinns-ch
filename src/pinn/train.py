@@ -501,6 +501,16 @@ def parse_args() -> argparse.Namespace:
         help="Defaults to 'cuda' when a GPU is available (Colab), else 'cpu'.",
     )
     parser.add_argument("--checkpoint-every", type=int, default=500, help="Epochs between checkpoints")
+    parser.add_argument(
+        "--save-at-lbfgs-steps",
+        type=int,
+        nargs="+",
+        default=[],
+        metavar="N",
+        help="Also save checkpoints/lbfgs_step<N>.pt after exactly N completed "
+        "L-BFGS steps (with a held-out entry at that step), e.g. 400 in a "
+        "1000-step run, to compare budgets within one run.",
+    )
     parser.add_argument("--log-every", type=int, default=100, help="Epochs between progress prints")
     parser.add_argument(
         "--run-name",
@@ -582,6 +592,8 @@ def parse_args() -> argparse.Namespace:
                 parser.error(f"{flag} changes, reweights or removes the IC points; not with --sa-terms ic")
     if args.sa_terms and args.sa_mask == "sigmoid" and args.sa_mask_scale <= 1:
         parser.error("--sa-mask-scale must be > 1")
+    if any(n < 1 or n > args.lbfgs_steps for n in args.save_at_lbfgs_steps):
+        parser.error(f"--save-at-lbfgs-steps must be within 1..--lbfgs-steps ({args.lbfgs_steps})")
     if args.sa_lr is None:
         args.sa_lr = args.lr
     ics = INITIAL_CONDITIONS if args.dim == 2 else INITIAL_CONDITIONS_1D
@@ -1128,6 +1140,14 @@ def train(args: argparse.Namespace) -> None:
         print(f"[lbfgs] step {lbfgs_step + 1:3d}/{lbfgs_steps} {format_losses(last_losses)}")
         if heldout is not None and (lbfgs_step + 1) % args.heldout_every == 0:
             record_heldout()
+        if lbfgs_step + 1 in args.save_at_lbfgs_steps:
+            if heldout is not None and heldout["step"][-1] != len(history["total"]):
+                record_heldout()
+            save_checkpoint(
+                model, os.path.join(checkpoints_dir, f"lbfgs_step{lbfgs_step + 1:04d}.pt"), args, history, heldout,
+                adam_steps=adam_steps, extras=checkpoint_extras(),
+            )
+            print(f"[lbfgs] step {lbfgs_step + 1:3d}/{lbfgs_steps} saved lbfgs_step{lbfgs_step + 1:04d}.pt")
         if lbfgs_step % args.checkpoint_every == 0:
             checkpoint_path = os.path.join(checkpoints_dir, f"checkpoint_step{len(history['total']):06d}.pt")
             save_checkpoint(
