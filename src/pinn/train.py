@@ -27,7 +27,8 @@ from src.pinn.losses import (
     time_binned_mean,
 )
 from src.pinn.layer_stats import LayerStatsLog, update_ratios, weight_snapshot
-from src.pinn.ic_torch import hard_ic_kwargs
+from src.pinn.ic_fit import fit_ic_field
+from src.pinn.ic_torch import exact_ic_field, hard_ic_kwargs
 from src.pinn.model import HARD_IC_FORMS, PINN
 from src.pinn.self_adaptive import SA_MASKS, SA_TERMS, SelfAdaptiveWeights
 from src.pinn.run_paths import checkpoints_dir_for, final_path_for, run_dir_for
@@ -201,6 +202,19 @@ def parse_args() -> argparse.Namespace:
         "(cross, two_circles, two_intervals) fade out like exp(-t/tau); needs "
         "--hard-ic-tau > 0.",
     )
+    parser.add_argument(
+        "--hard-ic-fit",
+        action="store_true",
+        help="With --hard-ic: use a frozen tanh MLP M0(x) fitted to u0 "
+        "(src/pinn/ic_fit.py) instead of the exact u0, so u0's corner "
+        "singularities (cross: eps^2 Lap u0 ~ 1/r) don't reach the PDE "
+        "residual. u(x, 0) = M0(x) exactly; M0 is fitted before training.",
+    )
+    parser.add_argument("--hard-ic-fit-layers", type=int, default=4, help="Hidden layers of M0.")
+    parser.add_argument("--hard-ic-fit-width", type=int, default=100, help="Hidden width of M0.")
+    parser.add_argument("--hard-ic-fit-points", type=int, default=40000, help="Sobol points M0 is fitted on.")
+    parser.add_argument("--hard-ic-fit-epochs", type=int, default=5000, help="Full-batch Adam epochs for M0.")
+    parser.add_argument("--hard-ic-fit-lbfgs-steps", type=int, default=500, help="L-BFGS steps for M0 after Adam.")
     parser.add_argument("--x-max", type=float, default=1.0, help="Domain upper bound in x (lower is 0)")
     parser.add_argument("--y-max", type=float, default=1.0, help="Domain upper bound in y (lower is 0)")
     parser.add_argument("--t-max", type=float, default=0.01, help="Domain upper bound in t (lower is 0)")
@@ -560,6 +574,8 @@ def parse_args() -> argparse.Namespace:
             parser.error(f"--dense-window needs 0 <= T_START < T_END <= --t-max ({args.t_max})")
     if args.hard_ic_tau < 0:
         parser.error("--hard-ic-tau must be >= 0")
+    if args.hard_ic_fit and not args.hard_ic:
+        parser.error("--hard-ic-fit needs --hard-ic")
     if args.hard_ic:
         if args.hard_ic_form == "blend" and args.hard_ic_tau == 0:
             parser.error("--hard-ic-form blend needs --hard-ic-tau > 0")
@@ -645,10 +661,25 @@ def train(args: argparse.Namespace) -> None:
         hidden_width=args.hidden_width,
         **hard_ic_kwargs(vars(args)),
     ).to(device)
+    hard_ic_fit_stats = None
     if args.hard_ic:
         g = f"1 - exp(-t/{args.hard_ic_tau:g})" if args.hard_ic_tau else "t/t_max"
         u = "u0 + g N" if args.hard_ic_form == "add" else "(1 - g) u0 + g N"
         print(f"hard IC: u = {u}, g = {g}; no IC loss term")
+        if args.hard_ic_fit:
+            # Own generator inside: the PINN weights above and the sampling below
+            # see the same global RNG as a run with the exact u0.
+            print(f"hard IC: u0 = frozen MLP M0 ({args.hard_ic_fit_layers}x{args.hard_ic_fit_width}) fitted to the exact u0")
+            hard_ic_fit_stats = fit_ic_field(
+                model.hard_ic,
+                exact_ic_field(vars(args)).to(device),
+                epsilon=args.epsilon,
+                n_points=500 if args.smoke_test else args.hard_ic_fit_points,
+                adam_epochs=3 if args.smoke_test else args.hard_ic_fit_epochs,
+                lbfgs_steps=2 if args.smoke_test else args.hard_ic_fit_lbfgs_steps,
+                lr=args.lr,
+                seed=args.weight_seed,
+            )
 
     n_collocation = 100 if args.smoke_test else args.n_collocation
     n_ic = 10 if args.smoke_test else args.n_ic
@@ -918,6 +949,8 @@ def train(args: argparse.Namespace) -> None:
 
     def checkpoint_extras() -> dict:
         extras = {"timing": dict(timing)}
+        if hard_ic_fit_stats is not None:
+            extras["hard_ic_fit"] = hard_ic_fit_stats
         if ic_pretrain:
             extras["ic_pretrain"] = ic_pretrain
         if lbfgs_resample_steps:

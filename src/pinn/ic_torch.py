@@ -151,16 +151,34 @@ class InitialConditionField(nn.Module):
         return f"dim={self.dim}, name={self.name!r}, epsilon={self.epsilon}, seed={self.seed}"
 
 
+def exact_ic_field(train_args: dict) -> InitialConditionField:
+    """The run's exact u0 as an InitialConditionField, from its args."""
+    return InitialConditionField(
+        train_args.get("dim", 2), train_args["ic"], train_args["epsilon"], train_args.get("ic_seed", 0)
+    )
+
+
 def hard_ic_kwargs(train_args: dict) -> dict:
     """PINN(...) keyword arguments for the hard IC from a run's args
     (vars(argparse.Namespace), or a checkpoint's "args"). Empty for runs
     without --hard-ic, including checkpoints from before the flag existed,
-    so train.py and evaluate.load_model build the same model."""
+    so train.py and evaluate.load_model build the same model.
+
+    With --hard-ic-fit the field is an (unfitted, zero) FittedICField of the
+    run's size: train.py fits it, load_model fills it from the state_dict."""
     if not train_args.get("hard_ic", False):
         return {}
-    field = InitialConditionField(
-        train_args.get("dim", 2), train_args["ic"], train_args["epsilon"], train_args.get("ic_seed", 0)
-    )
+    dim = train_args.get("dim", 2)
+    if train_args.get("hard_ic_fit", False):
+        from src.pinn.ic_fit import FittedICField
+
+        upper = [train_args["x_max"], train_args["y_max"]][:dim]
+        field = FittedICField(
+            torch.zeros(dim), torch.tensor(upper, dtype=torch.float32),
+            train_args.get("hard_ic_fit_layers", 4), train_args.get("hard_ic_fit_width", 100),
+        )
+    else:
+        field = exact_ic_field(train_args)
     return {
         "hard_ic": field,
         "hard_ic_tau": train_args.get("hard_ic_tau", 0.0),
