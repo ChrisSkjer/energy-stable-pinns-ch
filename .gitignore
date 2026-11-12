@@ -51,3 +51,7 @@ Report/Research_Notes/
 
 # Claude Code skills (local tooling)
 .claude/skills/
+
+# Fitted u0 networks for --hard-ic-fit (src/pinn/ic_fit.py): small, and kept in
+# git so a fresh Colab clone reuses them instead of refitting
+!ic_fits/*.pt

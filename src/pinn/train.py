@@ -27,7 +27,7 @@ from src.pinn.losses import (
     time_binned_mean,
 )
 from src.pinn.layer_stats import LayerStatsLog, update_ratios, weight_snapshot
-from src.pinn.ic_fit import fit_ic_field
+from src.pinn.ic_fit import IC_FIT_CACHE_DIR, cache_key, fit_ic_field, load_or_fit_ic_field
 from src.pinn.ic_torch import exact_ic_field, hard_ic_kwargs
 from src.pinn.model import HARD_IC_FORMS, PINN
 from src.pinn.self_adaptive import SA_MASKS, SA_TERMS, SelfAdaptiveWeights
@@ -215,6 +215,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hard-ic-fit-points", type=int, default=40000, help="Sobol points M0 is fitted on.")
     parser.add_argument("--hard-ic-fit-epochs", type=int, default=5000, help="Full-batch Adam epochs for M0.")
     parser.add_argument("--hard-ic-fit-lbfgs-steps", type=int, default=500, help="L-BFGS steps for M0 after Adam.")
+    parser.add_argument(
+        "--hard-ic-fit-refit",
+        action="store_true",
+        help="Fit M0 again even if ic_fits/ already has a fit for this IC and "
+        "these settings (and overwrite it). Without it the cached fit is loaded.",
+    )
     parser.add_argument("--x-max", type=float, default=1.0, help="Domain upper bound in x (lower is 0)")
     parser.add_argument("--y-max", type=float, default=1.0, help="Domain upper bound in y (lower is 0)")
     parser.add_argument("--t-max", type=float, default=0.01, help="Domain upper bound in t (lower is 0)")
@@ -670,16 +676,18 @@ def train(args: argparse.Namespace) -> None:
             # Own generator inside: the PINN weights above and the sampling below
             # see the same global RNG as a run with the exact u0.
             print(f"hard IC: u0 = frozen MLP M0 ({args.hard_ic_fit_layers}x{args.hard_ic_fit_width}) fitted to the exact u0")
-            hard_ic_fit_stats = fit_ic_field(
-                model.hard_ic,
-                exact_ic_field(vars(args)).to(device),
-                epsilon=args.epsilon,
-                n_points=500 if args.smoke_test else args.hard_ic_fit_points,
-                adam_epochs=3 if args.smoke_test else args.hard_ic_fit_epochs,
-                lbfgs_steps=2 if args.smoke_test else args.hard_ic_fit_lbfgs_steps,
-                lr=args.lr,
-                seed=args.weight_seed,
-            )
+            target = exact_ic_field(vars(args)).to(device)
+            if args.smoke_test:  # tiny fit, never cached
+                hard_ic_fit_stats = fit_ic_field(
+                    model.hard_ic, target, epsilon=args.epsilon, n_points=500, adam_epochs=3, lbfgs_steps=2,
+                    lr=args.lr, seed=args.weight_seed,
+                )
+            else:
+                hard_ic_fit_stats = load_or_fit_ic_field(
+                    model.hard_ic, target, cache_key(vars(args)), IC_FIT_CACHE_DIR, refit=args.hard_ic_fit_refit,
+                    epsilon=args.epsilon, n_points=args.hard_ic_fit_points, adam_epochs=args.hard_ic_fit_epochs,
+                    lbfgs_steps=args.hard_ic_fit_lbfgs_steps, lr=args.lr, seed=args.weight_seed,
+                )
 
     n_collocation = 100 if args.smoke_test else args.n_collocation
     n_ic = 10 if args.smoke_test else args.n_ic

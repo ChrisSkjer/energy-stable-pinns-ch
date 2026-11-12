@@ -88,3 +88,41 @@ def test_hard_ic_fit_needs_hard_ic(monkeypatch):
     monkeypatch.setattr("sys.argv", ["train", "--hard-ic-fit"])
     with pytest.raises(SystemExit):
         parse_args()
+
+
+def _fit_args(**overrides):
+    args = {"ic": "step", "dim": 1, "epsilon": 0.05, "ic_seed": 42, "x_max": 1.0, "y_max": 1.0,
+            "hard_ic_fit_layers": 2, "hard_ic_fit_width": 8, "hard_ic_fit_points": 64,
+            "hard_ic_fit_epochs": 5, "hard_ic_fit_lbfgs_steps": 1, "lr": 1e-3, "weight_seed": 0}
+    return {**args, **overrides}
+
+
+def test_cache_path_names_the_ic_and_the_fit_settings(tmp_path):
+    from src.pinn.ic_fit import cache_key, cache_path
+
+    path = cache_path(tmp_path, cache_key(_fit_args()))
+    assert path.name == "step_dim1_eps0.05_icseed42_2x8_n64_e5_lb1_lr0.001_seed0.pt"
+    assert cache_path(tmp_path, cache_key(_fit_args(hard_ic_fit_width=16))) != path
+
+
+def test_second_call_loads_the_cached_fit_instead_of_fitting(tmp_path, monkeypatch):
+    from src.pinn import ic_fit
+
+    args = _fit_args()
+    target = InitialConditionField(1, "step", 0.05)
+    fit_kwargs = dict(epsilon=0.05, n_points=64, adam_epochs=5, lbfgs_steps=1, log_every=0)
+    first = FittedICField(torch.zeros(1), torch.ones(1), 2, 8)
+    stats = ic_fit.load_or_fit_ic_field(first, target, ic_fit.cache_key(args), tmp_path, **fit_kwargs)
+    assert not stats["cached"]
+
+    def no_fit(*a, **k):
+        raise AssertionError("should have loaded the cache")
+
+    monkeypatch.setattr(ic_fit, "fit_ic_field", no_fit)
+    second = FittedICField(torch.zeros(1), torch.ones(1), 2, 8)
+    stats = ic_fit.load_or_fit_ic_field(second, target, ic_fit.cache_key(args), tmp_path, **fit_kwargs)
+    assert stats["cached"] and stats["rel_l2"] > 0
+    x = torch.rand(10, 1)
+    torch.testing.assert_close(second(x), first(x))
+    with pytest.raises(AssertionError):  # refit ignores the cache
+        ic_fit.load_or_fit_ic_field(second, target, ic_fit.cache_key(args), tmp_path, refit=True, **fit_kwargs)

@@ -12,12 +12,17 @@ The weights are buffers, not parameters, so the main optimisers, the
 parameter count and the layer statistics see only the PINN's own weights.
 They are persistent, so they are saved in the PINN's state_dict under
 "hard_ic.*" and evaluate.load_model restores them.
+
+Fits are cached in ic_fits/ at the repo root (tracked in git, so a fresh
+Colab clone has them too), one file per IC and fit settings (cache_key), so
+a fit is done once and reused by every run with the same settings.
 """
 
 from __future__ import annotations
 
 import math
 import time
+from pathlib import Path
 
 import torch
 from torch import nn
@@ -63,6 +68,64 @@ class FittedICField(nn.Module):
 
     def extra_repr(self) -> str:
         return f"n_space={self.n_space}, hidden_layers={self.hidden_layers}, hidden_width={self.hidden_width} (frozen)"
+
+
+# Relative to the repo root, like results/pinn_models (train.py runs from there).
+IC_FIT_CACHE_DIR = "ic_fits"
+
+
+def cache_key(train_args: dict) -> dict:
+    """Everything that determines a run's fitted M0: the IC and the fit settings."""
+    return {
+        "ic": train_args["ic"],
+        "dim": train_args.get("dim", 2),
+        "epsilon": float(train_args["epsilon"]),
+        "ic_seed": train_args.get("ic_seed", 0),
+        "x_max": float(train_args["x_max"]),
+        "y_max": float(train_args["y_max"]) if train_args.get("dim", 2) == 2 else None,
+        "layers": train_args["hard_ic_fit_layers"],
+        "width": train_args["hard_ic_fit_width"],
+        "points": train_args["hard_ic_fit_points"],
+        "epochs": train_args["hard_ic_fit_epochs"],
+        "lbfgs_steps": train_args["hard_ic_fit_lbfgs_steps"],
+        "lr": float(train_args["lr"]),
+        "seed": train_args["weight_seed"],
+    }
+
+
+def cache_path(cache_dir: str | Path, key: dict) -> Path:
+    """ic_fits/<ic>_dim2_eps0.05_icseed42_4x100_n40000_e5000_lb500_lr0.001_seed0.pt
+    (domain sizes only when not the unit square)."""
+    name = f"{key['ic']}_dim{key['dim']}_eps{key['epsilon']:g}_icseed{key['ic_seed']}"
+    if key["x_max"] != 1.0 or key["y_max"] not in (1.0, None):
+        name += f"_x{key['x_max']:g}" + (f"_y{key['y_max']:g}" if key["y_max"] is not None else "")
+    name += (f"_{key['layers']}x{key['width']}_n{key['points']}_e{key['epochs']}"
+             f"_lb{key['lbfgs_steps']}_lr{key['lr']:g}_seed{key['seed']}.pt")
+    return Path(cache_dir) / name
+
+
+def load_or_fit_ic_field(
+    field: FittedICField, target: nn.Module, key: dict, cache_dir: str | Path, refit: bool = False, **fit_kwargs
+) -> dict:
+    """Fill `field` from the cached fit for `key` in cache_dir if there is one
+    (and refit is False), else fit it with fit_ic_field(field, target, **fit_kwargs)
+    and save it there. Returns the fit statistics, with "cache" (the file) and
+    "cached" (True if loaded)."""
+    path = cache_path(cache_dir, key)
+    if path.exists() and not refit:
+        saved = torch.load(path, map_location=field.lower.device, weights_only=False)
+        if saved["key"] != key:
+            raise ValueError(f"{path} was fitted with {saved['key']}, not {key}")
+        field.load_state_dict(saved["state_dict"])
+        print(f"[ic fit] loaded {path} (rel L2 {saved['stats']['rel_l2']:.2e}, "
+              f"eps^2 Lap max {saved['stats']['eps2_lap_fit_max']:.3g})")
+        return {**saved["stats"], "cache": str(path), "cached": True}
+    stats = fit_ic_field(field, target, **fit_kwargs)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    state = {name: value.cpu() for name, value in field.state_dict().items()}
+    torch.save({"key": key, "state_dict": state, "stats": stats}, path)
+    print(f"[ic fit] saved {path}")
+    return {**stats, "cache": str(path), "cached": False}
 
 
 def _sobol_points(n: int, lower: torch.Tensor, upper: torch.Tensor, seed: int) -> torch.Tensor:
