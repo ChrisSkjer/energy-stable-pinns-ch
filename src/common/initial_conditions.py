@@ -97,7 +97,7 @@ _NOISE_AMPLITUDE = 0.05  # 1D only, see noise_1d
 # only ~0.25 * amplitude (0.244 for seed 42), RMS ~0.07 * amplitude. 3.5 gives
 # max|u| ~0.85 -- clearly separated +/- regions, still inside the wells, and
 # well above the network's output scale at init.
-_NOISE_AMPLITUDE_2D = 3.5
+_NOISE_AMPLITUDE_2D = 1
 _NOISE_MAX_MODE = 8  # shortest wavelength 2/8 = 0.25
 
 

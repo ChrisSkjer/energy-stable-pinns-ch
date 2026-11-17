@@ -146,6 +146,9 @@ def checkpoint_metrics(checkpoint: dict) -> dict:
     train.py checkpoint."""
     args, history = checkpoint["args"], checkpoint["history"]
     out: dict = {"parameters": count_parameters(checkpoint["model_state"])}
+    # e.g. "Tesla T4" or "NVIDIA A100-SXM4-40GB"; absent in older checkpoints.
+    if "device_name" in checkpoint:
+        out["device"] = checkpoint["device_name"]
     out["final_loss"] = {k: v[-1] for k, v in history.items() if v}
     out["steps"] = len(history.get("total", []))
     out["adam_steps"] = adam_step_count(args, history, checkpoint.get("adam_steps"))

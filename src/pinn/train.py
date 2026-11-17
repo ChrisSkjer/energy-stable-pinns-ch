@@ -655,6 +655,10 @@ def train(args: argparse.Namespace) -> None:
     print(f"run directory: {run_dir_for(run_name)}")
 
     device = torch.device(args.device)
+    # Recorded in the checkpoint (and metrics.json): Colab hands out T4 or A100,
+    # which changes the wall-clock times.
+    device_name = torch.cuda.get_device_name(device) if device.type == "cuda" else device.type
+    print(f"device: {device_name}")
     lower, upper = domain_bounds(args.dim, args.x_max, args.y_max, args.t_max)
 
     torch.manual_seed(args.weight_seed)
@@ -956,7 +960,7 @@ def train(args: argparse.Namespace) -> None:
     lbfgs_resample_steps: list[int] = []
 
     def checkpoint_extras() -> dict:
-        extras = {"timing": dict(timing)}
+        extras = {"timing": dict(timing), "device_name": device_name}
         if hard_ic_fit_stats is not None:
             extras["hard_ic_fit"] = hard_ic_fit_stats
         if ic_pretrain:
