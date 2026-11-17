@@ -72,6 +72,7 @@ class CahnHilliardConfig:
     log_every: int = 5  # write diagnostics every N time steps
     ic: str = "cross"  # initial condition, see src/common/initial_conditions.py
     seed: int = 42  # random seed for the initial condition (used by ic="noise")
+    noise_amplitude: float = 0.0  # 2D noise IC amplitude; 0 = code default _NOISE_AMPLITUDE_2D
     visualize: bool = True  # save concentration-field PNG frames
     viz_every: int = 5  # save a frame every N time steps (if visualize)
     show_gridpoints: bool = False  # overlay mesh vertices on the solution frames

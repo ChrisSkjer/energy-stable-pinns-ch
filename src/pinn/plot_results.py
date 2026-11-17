@@ -44,7 +44,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from src.common.initial_conditions import initial_condition
+from src.common.initial_conditions import initial_condition, set_noise_amplitude_2d
 from src.common.metrics import relative_l2_error
 from src.common.plotting import (
     load_diagnostics,
@@ -582,6 +582,8 @@ if __name__ == "__main__":
         train_args = None
         if cli_args.checkpoint is not None:
             train_args = torch.load(cli_args.checkpoint, map_location="cpu")["args"]
+            if train_args.get("noise_amplitude") is not None:
+                set_noise_amplitude_2d(train_args["noise_amplitude"])
         saved_paths += plot_field_comparison(
             cli_args.evaluation,
             cli_args.fem_fields,

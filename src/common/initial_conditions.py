@@ -101,6 +101,16 @@ _NOISE_AMPLITUDE_2D = 1
 _NOISE_MAX_MODE = 8  # shortest wavelength 2/8 = 0.25
 
 
+def set_noise_amplitude_2d(amplitude: float) -> None:
+    """Override _NOISE_AMPLITUDE_2D for this process (--noise-amplitude in
+    train.py and the FEM solver; load_model restores a run's value). Both the
+    numpy `noise` and the torch port read the module constant at call time."""
+    global _NOISE_AMPLITUDE_2D
+    if amplitude <= 0:
+        raise ValueError("noise amplitude must be > 0")
+    _NOISE_AMPLITUDE_2D = float(amplitude)
+
+
 def noise_coefficients(seed: int) -> np.ndarray:
     """(n, n) mode coefficients a_kl of `noise`, n = _NOISE_MAX_MODE + 1:
     seeded uniform in [-1, 1], (0, 0) mode dropped, scaled to sum |a_kl| = 1.

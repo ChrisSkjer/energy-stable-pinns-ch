@@ -14,6 +14,7 @@ import time
 
 import torch
 
+import src.common.initial_conditions as ics_module
 from src.common.initial_conditions import INITIAL_CONDITIONS, INITIAL_CONDITIONS_1D
 from src.pinn.losses import (
     DEFAULT_EPSILON,
@@ -234,6 +235,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Set --output-scale to max|u0| of the initial condition (on a fine "
         "grid). The resolved value is stored as output_scale in the checkpoint.",
+    )
+    parser.add_argument(
+        "--noise-amplitude",
+        type=float,
+        default=None,
+        help="Amplitude of the 2D noise IC (default: _NOISE_AMPLITUDE_2D in "
+        "src/common/initial_conditions.py). max|u0| ~0.244 * amplitude. The "
+        "resolved value is stored as noise_amplitude in the checkpoint.",
     )
     parser.add_argument("--x-max", type=float, default=1.0, help="Domain upper bound in x (lower is 0)")
     parser.add_argument("--y-max", type=float, default=1.0, help="Domain upper bound in y (lower is 0)")
@@ -594,6 +603,8 @@ def parse_args() -> argparse.Namespace:
             parser.error(f"--dense-window needs 0 <= T_START < T_END <= --t-max ({args.t_max})")
     if args.hard_ic_tau < 0:
         parser.error("--hard-ic-tau must be >= 0")
+    if args.noise_amplitude is not None and args.noise_amplitude <= 0:
+        parser.error("--noise-amplitude must be > 0")
     if args.output_scale <= 0:
         parser.error("--output-scale must be > 0")
     if args.output_scale_ic and args.output_scale != 1.0:
@@ -691,6 +702,14 @@ def train(args: argparse.Namespace) -> None:
     device_name = torch.cuda.get_device_name(device) if device.type == "cuda" else device.type
     print(f"device: {device_name}")
     lower, upper = domain_bounds(args.dim, args.x_max, args.y_max, args.t_max)
+
+    # Before anything evaluates u0. Resolved and stored for every run, so
+    # load_model can restore it even if the code default changes later.
+    if args.noise_amplitude is None:
+        args.noise_amplitude = ics_module._NOISE_AMPLITUDE_2D
+    ics_module.set_noise_amplitude_2d(args.noise_amplitude)
+    if args.ic == "noise" and args.dim == 2:
+        print(f"noise IC amplitude: {args.noise_amplitude:g}")
 
     if args.output_scale_ic:
         # Written back into args, so the checkpoint (and load_model) has the number.
