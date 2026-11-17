@@ -221,6 +221,20 @@ def parse_args() -> argparse.Namespace:
         help="Fit M0 again even if ic_fits/ already has a fit for this IC and "
         "these settings (and overwrite it). Without it the cached fit is loaded.",
     )
+    parser.add_argument(
+        "--output-scale",
+        type=float,
+        default=1.0,
+        help="Multiply the network's raw output (u and mu) by A: u = A N "
+        "(soft IC), u = u0 + g A N (hard IC). Keeps N O(1) for small-amplitude "
+        "solutions; the PDE and losses stay in u.",
+    )
+    parser.add_argument(
+        "--output-scale-ic",
+        action="store_true",
+        help="Set --output-scale to max|u0| of the initial condition (on a fine "
+        "grid). The resolved value is stored as output_scale in the checkpoint.",
+    )
     parser.add_argument("--x-max", type=float, default=1.0, help="Domain upper bound in x (lower is 0)")
     parser.add_argument("--y-max", type=float, default=1.0, help="Domain upper bound in y (lower is 0)")
     parser.add_argument("--t-max", type=float, default=0.01, help="Domain upper bound in t (lower is 0)")
@@ -580,6 +594,10 @@ def parse_args() -> argparse.Namespace:
             parser.error(f"--dense-window needs 0 <= T_START < T_END <= --t-max ({args.t_max})")
     if args.hard_ic_tau < 0:
         parser.error("--hard-ic-tau must be >= 0")
+    if args.output_scale <= 0:
+        parser.error("--output-scale must be > 0")
+    if args.output_scale_ic and args.output_scale != 1.0:
+        parser.error("use either --output-scale or --output-scale-ic, not both")
     if args.hard_ic_fit and not args.hard_ic:
         parser.error("--hard-ic-fit needs --hard-ic")
     if args.hard_ic:
@@ -626,6 +644,19 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
+def ic_max_abs(args: argparse.Namespace) -> float:
+    """max|u0| of the run's initial condition on a fine grid over the domain
+    (401^2 points in 2D, 4001 in 1D) -- the scale for --output-scale-ic."""
+    xs = torch.linspace(0.0, args.x_max, 401 if args.dim == 2 else 4001)
+    if args.dim == 2:
+        gx, gy = torch.meshgrid(xs, torch.linspace(0.0, args.y_max, 401), indexing="ij")
+        points = torch.stack([gx.ravel(), gy.ravel(), torch.zeros(gx.numel())], dim=1)
+    else:
+        points = torch.stack([xs, torch.zeros_like(xs)], dim=1)
+    u0 = ic_targets(points, ic=args.ic, epsilon=args.epsilon, ic_seed=args.ic_seed)
+    return float(u0.abs().max())
+
+
 def is_improvement(total: float, best: float | None, tol: float) -> bool:
     """Whether `total` beats the best total loss so far by enough to count.
 
@@ -661,6 +692,13 @@ def train(args: argparse.Namespace) -> None:
     print(f"device: {device_name}")
     lower, upper = domain_bounds(args.dim, args.x_max, args.y_max, args.t_max)
 
+    if args.output_scale_ic:
+        # Written back into args, so the checkpoint (and load_model) has the number.
+        args.output_scale = ic_max_abs(args)
+        print(f"output scale: A = max|u0| = {args.output_scale:.4g}")
+    elif args.output_scale != 1.0:
+        print(f"output scale: A = {args.output_scale:g}")
+
     torch.manual_seed(args.weight_seed)
     model = PINN(
         lower_bound=lower,
@@ -670,6 +708,7 @@ def train(args: argparse.Namespace) -> None:
         hidden_layers=args.hidden_layers,
         hidden_width=args.hidden_width,
         **hard_ic_kwargs(vars(args)),
+        output_scale=args.output_scale,
     ).to(device)
     hard_ic_fit_stats = None
     if args.hard_ic:

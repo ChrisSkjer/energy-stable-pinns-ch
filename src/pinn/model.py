@@ -31,6 +31,12 @@ class PINN(nn.Module):
     fade out like exp(-t/tau) instead of staying in u for all t; it needs
     tau > 0. mu (column 1) is left free. The field holds no persistent
     tensors, so the state_dict is the same with or without it.
+
+    `output_scale` A multiplies the raw network output (both u and mu)
+    before the hard IC is applied: u = A N (soft IC), u = u0 + g A N (hard
+    IC, "add"). It lets N stay O(1) for small-amplitude solutions
+    (--output-scale / --output-scale-ic). A plain float, not a buffer, so
+    the state_dict is unchanged; load_model reads it from the run's args.
     """
 
     def __init__(
@@ -45,6 +51,7 @@ class PINN(nn.Module):
         hard_ic: nn.Module | None = None,
         hard_ic_tau: float = 0.0,
         hard_ic_form: str = "add",
+        output_scale: float = 1.0,
     ) -> None:
         super().__init__()
         if hard_ic_form not in HARD_IC_FORMS:
@@ -53,6 +60,9 @@ class PINN(nn.Module):
             raise ValueError("hard_ic_tau must be >= 0")
         if hard_ic is not None and hard_ic_form == "blend" and hard_ic_tau == 0:
             raise ValueError("hard_ic_form 'blend' needs hard_ic_tau > 0")
+        if output_scale <= 0:
+            raise ValueError("output_scale must be > 0")
+        self.output_scale = float(output_scale)
         self.hard_ic = hard_ic
         self.hard_ic_tau = float(hard_ic_tau)
         self.hard_ic_form = hard_ic_form
@@ -88,6 +98,8 @@ class PINN(nn.Module):
         """
         x_normalized = 2 * (x - self.lower_bound) / (self.upper_bound - self.lower_bound) - 1.0
         out = self.model(x_normalized)
+        if self.output_scale != 1.0:
+            out = self.output_scale * out
         if self.hard_ic is None:
             return out
         t = x[:, -1:] - self.lower_bound[-1]

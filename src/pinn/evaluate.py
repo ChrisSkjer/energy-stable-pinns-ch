@@ -90,6 +90,8 @@ def load_model(checkpoint_path: str, device: torch.device | str = "cpu") -> PINN
         hidden_layers=train_args["hidden_layers"],
         hidden_width=train_args["hidden_width"],
         **hard_ic_kwargs(train_args),  # --hard-ic runs; {} otherwise
+        # resolved value (also for --output-scale-ic); 1.0 for older runs
+        output_scale=train_args.get("output_scale", 1.0),
     ).to(device)
     model.load_state_dict(checkpoint["model_state"])
     model.eval()
