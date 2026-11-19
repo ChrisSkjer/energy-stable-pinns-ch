@@ -58,6 +58,6 @@ Run from the repo root, always with `-m`.
 - **Done:** FEM baseline, baseline PINN, post-training analysis and plots,
   metrics.
 - **Not done:**
-  - The energy penalty: `--energy-penalty` raises `NotImplementedError`,
-    which blocks research question 1.
+  - Runs with the energy/mass penalties (`--energy-penalty`,
+    `--mass-penalty`; implemented, untested in training) for research question 1.
   - Transfer learning, which blocks research question 2.

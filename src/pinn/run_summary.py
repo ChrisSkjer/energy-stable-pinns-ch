@@ -52,7 +52,8 @@ _RUN_SUMMARY_GROUPS: list[tuple[str, tuple[str, ...]]] = [
     (
         "loss weights",
         # pde_weight is kept for checkpoints from before the PDE u/mu split.
-        ("pde_weight", "pde_u_weight", "pde_mu_weight", "ic_weight", "bc_weight", "energy_penalty", "energy_weight"),
+        ("pde_weight", "pde_u_weight", "pde_mu_weight", "ic_weight", "bc_weight", "energy_penalty", "energy_weight",
+         "mass_penalty", "mass_weight", "physics_grid", "physics_times"),
     ),
     (
         "self-adaptive weights",

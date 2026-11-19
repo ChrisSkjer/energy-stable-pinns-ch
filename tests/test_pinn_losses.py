@@ -90,3 +90,87 @@ def test_time_binned_mean_drops_empty_bins():
     squared = torch.tensor([[2.0], [4.0]])
     # The middle bin is empty: the other two share the weight equally.
     assert time_binned_mean(squared, t, torch.linspace(0, 1, 4)).item() == pytest.approx(3.0)
+
+
+class _Drifting(nn.Module):
+    """u = c + b e^{-t} cos(pi x_0) + a t, mu = 0: mass int u dx =
+    (c + a t) |Omega| on [0, 1]^n, so it drifts at rate a."""
+
+    def __init__(self, a=0.0, b=1.0, c=0.0):
+        super().__init__()
+        self.a, self.b, self.c = a, b, c
+
+    def forward(self, p):
+        x, t = p[:, :-1], p[:, -1:]
+        u = self.c + self.b * torch.exp(-t) * torch.cos(math.pi * x[:, 0:1]) + self.a * t
+        return torch.cat([u, torch.zeros_like(u)], dim=1)
+
+
+@pytest.mark.parametrize("n_space", [1, 2])
+def test_trapezoid_weights_sum_to_domain_size_and_integrate_linear_exactly(n_space):
+    from src.pinn.losses import quadrature_grid
+
+    lower, upper = (0.0,) * n_space + (0.0,), (2.0,) * n_space + (1.0,)
+    grid = quadrature_grid(lower, upper, 9, 4, dtype=torch.float64)
+    assert grid.points.shape == (4 * 9**n_space, n_space + 1)
+    assert grid.weights.sum().item() == pytest.approx(2.0**n_space)
+    torch.testing.assert_close(grid.times, torch.linspace(0, 1, 4, dtype=torch.float64))
+    # int x_0 dx over [0, 2]^n = 2 * 2^(n-1) at every slice (trapezoid is exact for linear).
+    x0 = grid.points.detach()[:, 0:1]
+    torch.testing.assert_close(grid.integrate(x0), torch.full((4,), 2.0**n_space, dtype=torch.float64))
+
+
+@pytest.mark.parametrize("n_space", [1, 2])
+def test_energy_rate_matches_finite_difference_of_quadrature_energy(n_space):
+    from src.pinn.losses import QuadratureGrid, energy_rate, quadrature_grid
+
+    eps = 0.1
+    model = _ClosedForm()
+    grid = quadrature_grid((0.0,) * (n_space + 1), (1.0,) * (n_space + 1), 17, 3, dtype=torch.float64)
+    rate = energy_rate(model, grid, epsilon=eps)
+
+    def energy_at(shift):
+        p = grid.points.detach().clone()
+        p[:, -1] += shift
+        p.requires_grad_(True)
+        u = model(p)[:, 0:1]
+        grad = torch.autograd.grad(u, p, torch.ones_like(u))[0][:, :-1]
+        density = 0.25 * (u**2 - 1) ** 2 + 0.5 * eps**2 * (grad**2).sum(1, keepdim=True)
+        return QuadratureGrid(p, grid.weights, grid.n_t).integrate(density)
+
+    h = 1e-5
+    torch.testing.assert_close(rate, (energy_at(h) - energy_at(-h)) / (2 * h), rtol=1e-6, atol=1e-8)
+
+
+def test_energy_stability_loss_penalises_only_increasing_energy():
+    from src.pinn.losses import energy_rate, energy_stability_loss, quadrature_grid
+
+    # u = e^t cos(pi x): |u| grows past 1 in places, so E rises; 1 + 0.1 e^{-t} cos
+    # relaxes to the well u = 1, so E falls.
+    grid = quadrature_grid((0.0, 0.0), (1.0, 1.0), 33, 4, dtype=torch.float64)
+    rate = energy_rate(_ClosedForm(), grid, epsilon=0.05)
+    expected = torch.mean(torch.clamp(rate, min=0) ** 2)
+    torch.testing.assert_close(energy_stability_loss(_ClosedForm(), grid, epsilon=0.05), expected)
+    assert (rate > 0).any()
+    relaxing = _Drifting(b=0.1, c=1.0)
+    assert (energy_rate(relaxing, grid, epsilon=0.05) < 0).all()
+    assert energy_stability_loss(relaxing, grid, epsilon=0.05).item() == 0.0
+
+
+@pytest.mark.parametrize("n_space", [1, 2])
+def test_mass_conservation_loss(n_space):
+    from src.pinn.losses import ic_mass, mass_conservation_loss, quadrature_grid
+
+    grid = quadrature_grid((0.0,) * (n_space + 1), (1.0,) * (n_space + 1), 33, 5, dtype=torch.float64)
+    n_slice = grid.weights.numel()
+    u0 = _Drifting()(grid.points[:n_slice].detach())[:, 0:1]
+    mass0, u0_sq = ic_mass(grid, u0)
+    assert mass0 == pytest.approx(0.0, abs=1e-12)  # int cos(pi x) = 0
+    assert u0_sq == pytest.approx(0.5, rel=1e-3)  # mean cos^2
+
+    assert mass_conservation_loss(_Drifting(0.0), grid, mass0, u0_sq).item() == pytest.approx(0.0, abs=1e-20)
+    # Drift a t at t = 0, 1/4, ..., 1: mean (a t)^2 / mean(u0^2).
+    a = 0.3
+    t = torch.linspace(0, 1, 5, dtype=torch.float64)
+    expected = torch.mean((a * t) ** 2) / u0_sq
+    assert mass_conservation_loss(_Drifting(a), grid, mass0, u0_sq).item() == pytest.approx(expected.item())

@@ -1,10 +1,13 @@
 """Loss terms for training the Cahn-Hilliard PINN.
 
 Separate functions for the PDE residual, IC/BC terms, and the
-energy-stability penalty used only by the enhanced model.
+energy-stability and mass-conservation penalties used only by the
+enhanced model (integrals over a QuadratureGrid of time slices).
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import torch
 from torch import nn
@@ -256,20 +259,151 @@ def bc_squared_normals(model: nn.Module, bc_points: torch.Tensor) -> torch.Tenso
     return du_dn**2 + dmu_dn**2
 
 
-def energy_stability_loss(model: nn.Module, collocation_points: torch.Tensor) -> torch.Tensor:
-    """Placeholder energy-dissipation penalty for the enhanced PINN.
+@dataclass
+class QuadratureGrid:
+    """Space-time points for the integral (energy, mass) loss terms: the same
+    endpoint-inclusive trapezoid grid in space at each of n_t fixed time
+    slices.
 
-    Encourages the Ginzburg-Landau free energy E(t) predicted by the network
-    to be non-increasing in time, matching the analytic dissipation property
-    of the Cahn-Hilliard equation.
+    points: (n_t * n_space, input_dim) rows (x, [y,] t), slice by slice,
+        requires_grad=True.
+    weights: (n_space,) trapezoid weights of the spatial grid; they sum to
+        the domain size |Omega|.
+    n_t: number of time slices.
+    """
+
+    points: torch.Tensor
+    weights: torch.Tensor
+    n_t: int
+
+    @property
+    def times(self) -> torch.Tensor:
+        """(n_t,) the time of each slice."""
+        return self.points[:: self.weights.numel(), -1].detach()
+
+    def integrate(self, density: torch.Tensor) -> torch.Tensor:
+        """(n_t,) trapezoid integral over space of a pointwise (N, 1) density
+        on `points`, one per time slice."""
+        return density.reshape(self.n_t, -1) @ self.weights
+
+
+def trapezoid_weights(n: int, lower: tuple[float, ...], upper: tuple[float, ...], device=None, dtype=torch.float32) -> torch.Tensor:
+    """Flattened tensor-product trapezoid weights on the grid of n points per
+    axis between `lower` and `upper` (endpoints included), in the order of
+    torch.meshgrid(..., indexing="ij"). The torch, any-dimension version of
+    src/common/metrics.py::trapezoid_weights_2d, so the loss integrates
+    exactly as the diagnostics plots do."""
+    if n < 2:
+        raise ValueError("trapezoid_weights needs at least 2 points per axis")
+    weights = torch.ones((), device=device, dtype=dtype)
+    for lo, hi in zip(lower, upper):
+        w = torch.full((n,), (hi - lo) / (n - 1), device=device, dtype=dtype)
+        w[0] *= 0.5
+        w[-1] *= 0.5
+        weights = (weights.unsqueeze(-1) * w).reshape(-1)
+    return weights
+
+
+def quadrature_grid(lower: tuple[float, ...], upper: tuple[float, ...], n_space: int, n_t: int, device=None, dtype=torch.float32) -> QuadratureGrid:
+    """QuadratureGrid with n_space points per spatial axis and n_t evenly
+    spaced time slices over [t_lo, t_hi], both ends included.
+
+    Args:
+        lower, upper: corners of the (x, [y,] t) box, time last.
+    """
+    axes = [torch.linspace(lo, hi, n_space, device=device, dtype=dtype) for lo, hi in zip(lower[:-1], upper[:-1])]
+    space = torch.stack([g.reshape(-1) for g in torch.meshgrid(*axes, indexing="ij")], dim=1)
+    times = torch.linspace(lower[-1], upper[-1], n_t, device=device, dtype=dtype)
+    points = torch.cat(
+        [torch.cat([space, torch.full((space.shape[0], 1), float(t), device=device, dtype=dtype)], dim=1) for t in times]
+    )
+    weights = trapezoid_weights(n_space, lower[:-1], upper[:-1], device=device, dtype=dtype)
+    return QuadratureGrid(points.requires_grad_(True), weights, n_t)
+
+
+def energy_rate(model: nn.Module, grid: QuadratureGrid, epsilon=DEFAULT_EPSILON) -> torch.Tensor:
+    """dE/dt of the network's Ginzburg-Landau free energy
+
+        E(t) = int F(u) + (eps^2 / 2) |grad u|^2 dx,   F(u) = (u^2 - 1)^2 / 4,
+
+    (the energy src/common/metrics.py::free_energy plots) at each time slice
+    of `grid`, differentiated under the integral by autograd:
+
+        dE/dt = int f'(u) u_t + eps^2 grad u . grad u_t dx,   f'(u) = u^3 - u.
+
+    It uses u only, not the mu output, so it is the energy of the u the
+    network actually predicts, whatever mu's residual is.
+
+    Returns:
+        (n_t,) dE/dt per slice.
+    """
+    points = grid.points
+    u = model(points)[:, 0:1]
+    grad_u = torch.autograd.grad(u, points, grad_outputs=torch.ones_like(u), create_graph=True)[0]
+    u_t = grad_u[:, -1:]
+    # d/dx_i of u_t, i.e. u_tx_i: the gradient of the energy's gradient term.
+    grad_u_t = torch.autograd.grad(u_t, points, grad_outputs=torch.ones_like(u_t), create_graph=True)[0]
+    gradient_term = torch.sum(grad_u[:, :-1] * grad_u_t[:, :-1], dim=1, keepdim=True)
+    return grid.integrate((u**3 - u) * u_t + epsilon**2 * gradient_term)
+
+
+def energy_stability_loss(model: nn.Module, grid: QuadratureGrid, epsilon=DEFAULT_EPSILON) -> torch.Tensor:
+    """Energy-dissipation penalty for the enhanced PINN.
+
+    Cahn-Hilliard is a gradient flow, dE/dt = -m int |grad mu|^2 <= 0, so the
+    network's free energy must not increase. Penalises the slices where it
+    does:
+
+        mean over slices of relu(dE/dt)^2,
+
+    with dE/dt from `energy_rate`. Zero when E is non-increasing at every
+    slice; not normalised (dE/dt is in energy per time).
 
     Args:
         model: the PINN.
-        collocation_points: (N, input_dim) points used to estimate dE/dt.
+        grid: QuadratureGrid of time slices to check dE/dt at.
+        epsilon: interface half-width, as in the PDE residual.
 
     Returns:
-        Scalar penalty, zero when energy is non-increasing.
+        Scalar penalty.
     """
-    # TODO: compute (an estimate of) dE/dt from model predictions
-    # TODO: penalize positive dE/dt, e.g. via relu(dE/dt) ** 2
-    raise NotImplementedError
+    return torch.mean(torch.relu(energy_rate(model, grid, epsilon)) ** 2)
+
+
+def total_mass(model: nn.Module, grid: QuadratureGrid) -> torch.Tensor:
+    """(n_t,) total mass M(t) = int u dx of the network's u at each slice of
+    `grid` (trapezoid rule, as src/common/metrics.py::total_mass)."""
+    return grid.integrate(model(grid.points)[:, 0:1])
+
+
+def mass_conservation_loss(model: nn.Module, grid: QuadratureGrid, mass0: float, u0_sq_mean: float) -> torch.Tensor:
+    """Mass-conservation penalty: CH with no-flux walls keeps int u dx at its
+    initial value, so
+
+        mean over slices of ((M(t) - M0) / |Omega|)^2 / mean(u0^2),
+
+    with M(t) from `total_mass` and M0 = int u0 dx of the exact IC (see
+    `ic_mass`), so a network whose own t = 0 mass is off is penalised too.
+    (M - M0) / |Omega| is the drift of the mean of u; dividing its square by
+    mean(u0^2) makes it relative, the same normalisation as `ic_loss`.
+
+    Args:
+        model: the PINN.
+        grid: QuadratureGrid of time slices to check the mass at.
+        mass0, u0_sq_mean: from `ic_mass` on the same grid.
+    """
+    area = grid.weights.sum()
+    return torch.mean(((total_mass(model, grid) - mass0) / area) ** 2) / u0_sq_mean
+
+
+def ic_mass(grid: QuadratureGrid, u0: torch.Tensor) -> tuple[float, float]:
+    """(M0, mean(u0^2)) for `mass_conservation_loss`: the trapezoid integral
+    of the exact IC and its domain-mean square, on `grid`'s spatial grid.
+
+    Args:
+        u0: (n_space, 1) exact IC values at the spatial grid points (one
+            slice of grid.points, e.g. from sampling.ic_targets).
+    """
+    area = grid.weights.sum()
+    u0 = u0.reshape(-1).to(grid.weights)
+    return float(u0 @ grid.weights), float((u0**2) @ grid.weights / area)

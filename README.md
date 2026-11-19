@@ -256,9 +256,11 @@ command below in a ready-made clone → install → train → retrieve notebook
 python -m src.pinn.train --run-name eps0.01_h64x4 --device cuda --epochs 20000 --checkpoint-every 500
 ```
 
-Add `--energy-penalty --energy-weight <w>` to train the enhanced model
-instead of the baseline (the energy-penalty loss term itself is not
-implemented yet — see Status). Run `--help` for the full flag list:
+Add `--energy-penalty --energy-weight <w>` and/or `--mass-penalty
+--mass-weight <w>` to train the enhanced model instead of the baseline:
+relu(dE/dt)^2 and the relative drift of the trapezoid mass from the exact
+IC mass, on a `--physics-grid`^d grid at `--physics-times` fixed time
+slices. Run `--help` for the full flag list:
 domain bounds (`--x-max`/`--y-max`/`--t-max`), point counts
 (`--n-collocation`/`--n-ic`/`--n-bc`/`--pde-at-t0`), network size
 (`--hidden-layers`/`--hidden-width`), physics (`--epsilon`), initial
@@ -612,7 +614,4 @@ Work in progress.
 
 **Not implemented yet**
 
-- The energy-stability penalty (`energy_stability_loss` in
-  `src/pinn/losses.py`). Passing `--energy-penalty` currently raises
-  `NotImplementedError`. This blocks research question 1.
 - Transfer learning across time windows (research question 2).

@@ -22,6 +22,9 @@ from src.pinn.losses import (
     bc_squared_normals,
     energy_stability_loss,
     ic_loss,
+    ic_mass,
+    mass_conservation_loss,
+    quadrature_grid,
     ic_squared_errors,
     pde_residual_losses,
     pde_residuals,
@@ -138,6 +141,27 @@ def parse_args() -> argparse.Namespace:
         "Omit for the baseline PINN.",
     )
     parser.add_argument("--energy-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--mass-penalty",
+        action="store_true",
+        help="Enable the mass-conservation penalty: drift of int u dx from the "
+        "exact IC mass, on the --physics-grid slices (enhanced model).",
+    )
+    parser.add_argument("--mass-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--physics-grid",
+        type=int,
+        default=64,
+        help="Trapezoid grid points per spatial axis for the energy/mass "
+        "integrals (--energy-penalty, --mass-penalty).",
+    )
+    parser.add_argument(
+        "--physics-times",
+        type=int,
+        default=16,
+        help="Evenly spaced time slices over [0, t-max], both ends included, "
+        "that the energy/mass penalties are evaluated at. Fixed for the run.",
+    )
     parser.add_argument(
         "--pde-u-weight",
         type=float,
@@ -916,6 +940,22 @@ def train(args: argparse.Namespace) -> None:
                 # New Parameters: a fresh optimiser (its moments are lost).
                 sa_optimizer = sa_optimizer_cls(sa.parameters(), lr=args.sa_lr, maximize=True)
 
+    # Fixed space-time quadrature grid for the integral penalties, and the
+    # exact IC mass the mass penalty holds M(t) to.
+    physics_grid = None
+    if args.energy_penalty or args.mass_penalty:
+        n_grid = 8 if args.smoke_test else args.physics_grid
+        n_times = 3 if args.smoke_test else args.physics_times
+        physics_grid = quadrature_grid(lower, upper, n_grid, n_times, device=device)
+        n_slice = physics_grid.weights.numel()
+        u0_grid = ic_targets(physics_grid.points[:n_slice], ic=args.ic, epsilon=args.epsilon, ic_seed=args.ic_seed)
+        mass0, u0_sq_mean = ic_mass(physics_grid, u0_grid)
+        terms = " + ".join(name for name, on in (("energy", args.energy_penalty), ("mass", args.mass_penalty)) if on)
+        print(
+            f"physics penalties ({terms}): {n_grid}^{len(lower) - 1} trapezoid grid at {n_times} "
+            f"time slices; IC mass M0 = {mass0:.6g}"
+        )
+
     def compute_loss(points: TrainingPoints) -> dict[str, torch.Tensor]:
         if sa is not None and ("pde_u" in sa or "pde_mu" in sa):
             r_u, r_mu = pde_residuals(model, points.collocation, epsilon=args.epsilon)
@@ -948,7 +988,9 @@ def train(args: argparse.Namespace) -> None:
         else:
             losses["bc"] = args.bc_weight * bc_loss(model, points.bc_points)
         if args.energy_penalty:
-            losses["energy"] = args.energy_weight * energy_stability_loss(model, points.collocation)
+            losses["energy"] = args.energy_weight * energy_stability_loss(model, physics_grid, epsilon=args.epsilon)
+        if args.mass_penalty:
+            losses["mass"] = args.mass_weight * mass_conservation_loss(model, physics_grid, mass0, u0_sq_mean)
         losses["total"] = sum(losses.values())
         return losses
 
