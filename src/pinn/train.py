@@ -261,6 +261,16 @@ def parse_args() -> argparse.Namespace:
         "grid). The resolved value is stored as output_scale in the checkpoint.",
     )
     parser.add_argument(
+        "--output-init-scale",
+        type=float,
+        default=1.0,
+        help="Multiply the output layer's initial weights (Xavier) by F. Init "
+        "only; training is unchanged. Under Adam, --output-scale A is exactly "
+        "the same as F = A plus a last-layer lr x A, so this splits the two: "
+        "F = A without --output-scale = init effect only; --output-scale A with "
+        "F = 1/A = slow last layer only (same initial function as no scaling).",
+    )
+    parser.add_argument(
         "--noise-amplitude",
         type=float,
         default=None,
@@ -633,6 +643,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--output-scale must be > 0")
     if args.output_scale_ic and args.output_scale != 1.0:
         parser.error("use either --output-scale or --output-scale-ic, not both")
+    if args.output_init_scale <= 0:
+        parser.error("--output-init-scale must be > 0")
     if args.hard_ic_fit and not args.hard_ic:
         parser.error("--hard-ic-fit needs --hard-ic")
     if args.hard_ic:
@@ -753,6 +765,12 @@ def train(args: argparse.Namespace) -> None:
         **hard_ic_kwargs(vars(args)),
         output_scale=args.output_scale,
     ).to(device)
+    if args.output_init_scale != 1.0:
+        # Init only (the bias starts at zero): the state_dict is unchanged, so
+        # load_model needs nothing; the value stays in the checkpoint's args.
+        with torch.no_grad():
+            model.model[-1].weight.mul_(args.output_init_scale)
+        print(f"output layer init: Xavier weights x {args.output_init_scale:g}")
     hard_ic_fit_stats = None
     if args.hard_ic:
         g = f"1 - exp(-t/{args.hard_ic_tau:g})" if args.hard_ic_tau else "t/t_max"

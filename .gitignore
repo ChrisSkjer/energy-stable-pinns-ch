@@ -34,6 +34,8 @@ results/*
 
 # Personal research notes (public repo; kept local only)
 Report/Research_Notes/
+# Thesis (own repo; kept out of the code repo)
+Report/Thesis/
 
 # LaTeX build files (regenerated on every build)
 *.aux

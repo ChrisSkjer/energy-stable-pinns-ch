@@ -360,8 +360,8 @@ def plot_loss_history(history: dict[str, list[float]], ax=None, adam_steps: int 
             dict bundled into a checkpoint by
             src/pinn/train.py::save_checkpoint (read via
             torch.load(checkpoint_path)["history"]). Keys are "pde_u",
-            "pde_mu", "ic", "bc", "total", and "energy" when
-            --energy-penalty was enabled for that run (checkpoints from
+            "pde_mu", "ic", "bc", "total", and "energy" / "mass" when
+            --energy-penalty / --mass-penalty was enabled for that run (checkpoints from
             before the PDE split have a single "pde" key instead); each component's values already include its
             --*-weight multiplier, i.e. these are the same numbers
             train.py prints during training, not the raw unweighted terms.
@@ -381,9 +381,17 @@ def plot_loss_history(history: dict[str, list[float]], ax=None, adam_steps: int 
     if ax is None:
         _, ax = plt.subplots()
 
-    for name in ("pde", "pde_u", "pde_mu", "ic", "bc", "energy"):
-        if name in history:
-            ax.semilogy(history[name], lw=1.5, alpha=0.8, label=name)
+    # Up to six terms against five colours: linestyle and marker tell them
+    # apart too. The energy term is exactly 0 wherever E does not rise, and
+    # those steps leave gaps on the log axis.
+    names = [name for name in ("pde", "pde_u", "pde_mu", "ic", "bc", "energy", "mass") if name in history]
+    for k, name in enumerate(names):
+        values = history[name]
+        ax.semilogy(
+            values, lw=1.5, alpha=0.8, label=name,
+            color=LINE_COLORS[k % 4], ls=LINE_STYLES[k % len(LINE_STYLES)],
+            marker=LINE_MARKERS[k % len(LINE_MARKERS)], markersize=4, markevery=max(len(values) // 8, 1),
+        )
     if "total" in history:
         ax.semilogy(history["total"], lw=2.5, color="black", label="total")
     if adam_steps is not None and 0 < adam_steps < len(history.get("total", [])):
@@ -393,7 +401,9 @@ def plot_loss_history(history: dict[str, list[float]], ax=None, adam_steps: int 
     ax.set_ylabel("weighted loss")
     ax.set_title("Training loss")
     ax.grid(True, which="both", alpha=0.3)
-    ax.legend()
+    # Upper right: the losses have dropped well below their start by then,
+    # and the small terms (mass, bc) run along the bottom.
+    ax.legend(loc="upper right", ncol=2, fontsize="small")
     return ax
 
 
