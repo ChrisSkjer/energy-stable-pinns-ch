@@ -91,7 +91,7 @@ def two_circles(x, y, *, epsilon: float, seed: int = 0) -> np.ndarray:
 
 
 # --- smooth random noise -------------------------------------------------------
-_NOISE_MEAN = 0.0
+_NOISE_MEAN = 0.0  # 1D noise; the 2D noise has its own, see _NOISE_MEAN_2D
 _NOISE_AMPLITUDE = 0.05  # 1D only, see noise_1d
 # sum |a_kl| = 1 over 80 modes is a loose bound: the actual max|u - mean| is
 # only ~0.25 * amplitude (0.244 for seed 42), RMS ~0.07 * amplitude. 3.5 gives
@@ -99,6 +99,10 @@ _NOISE_AMPLITUDE = 0.05  # 1D only, see noise_1d
 # well above the network's output scale at init.
 _NOISE_AMPLITUDE_2D = 1
 _NOISE_MAX_MODE = 8  # shortest wavelength 2/8 = 0.25
+# Mean of the 2D noise IC (conserved by Cahn--Hilliard). 0 for every run so
+# far; --noise-mean sets it to test the output scale on a nonzero-mean IC.
+# Phase separation needs |mean| < 1/sqrt(3) (the spinodal region).
+_NOISE_MEAN_2D = 0.0
 
 
 def set_noise_amplitude_2d(amplitude: float) -> None:
@@ -109,6 +113,15 @@ def set_noise_amplitude_2d(amplitude: float) -> None:
     if amplitude <= 0:
         raise ValueError("noise amplitude must be > 0")
     _NOISE_AMPLITUDE_2D = float(amplitude)
+
+
+def set_noise_mean_2d(mean: float) -> None:
+    """Override _NOISE_MEAN_2D for this process (--noise-mean in train.py and
+    the FEM solver; load_model restores a run's value, 0 for older runs)."""
+    global _NOISE_MEAN_2D
+    if not -1.0 < mean < 1.0:
+        raise ValueError("noise mean must be in (-1, 1)")
+    _NOISE_MEAN_2D = float(mean)
 
 
 def noise_coefficients(seed: int) -> np.ndarray:
@@ -148,7 +161,7 @@ def noise(x, y, *, epsilon: float = 0.0, seed: int = 0) -> np.ndarray:
     cos_x = np.cos(np.pi * modes * x[..., None])  # (..., n)
     cos_y = np.cos(np.pi * modes * y[..., None])  # (..., n)
     field = np.einsum("...k,kl,...l->...", cos_x, coeffs, cos_y)
-    return _NOISE_MEAN + _NOISE_AMPLITUDE_2D * field
+    return _NOISE_MEAN_2D + _NOISE_AMPLITUDE_2D * field
 
 
 INITIAL_CONDITIONS: dict[str, InitialCondition] = {

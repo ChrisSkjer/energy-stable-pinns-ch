@@ -14,7 +14,7 @@ import warnings
 import numpy as np
 import torch
 
-from src.common.initial_conditions import set_noise_amplitude_2d
+from src.common.initial_conditions import set_noise_amplitude_2d, set_noise_mean_2d
 from src.pinn.ic_torch import hard_ic_kwargs
 from src.pinn.model import PINN
 from src.pinn.run_paths import infer_run_dir
@@ -84,6 +84,8 @@ def load_model(checkpoint_path: str, device: torch.device | str = "cpu") -> PINN
     # record it and get the current code default.
     if train_args.get("noise_amplitude") is not None:
         set_noise_amplitude_2d(train_args["noise_amplitude"])
+    # Runs from before --noise-mean all have mean 0.
+    set_noise_mean_2d(train_args.get("noise_mean", 0.0))
     # Checkpoints from before --dim existed are all 2D.
     lower, upper = domain_bounds(
         train_args.get("dim", 2), train_args["x_max"], train_args["y_max"], train_args["t_max"]

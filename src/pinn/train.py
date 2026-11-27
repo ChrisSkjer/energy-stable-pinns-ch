@@ -278,6 +278,14 @@ def parse_args() -> argparse.Namespace:
         "src/common/initial_conditions.py). max|u0| ~0.244 * amplitude. The "
         "resolved value is stored as noise_amplitude in the checkpoint.",
     )
+    parser.add_argument(
+        "--noise-mean",
+        type=float,
+        default=0.0,
+        help="Mean of the 2D noise IC (default 0). With a nonzero mean, "
+        "max|u0| (--output-scale-ic) and the spread max|u0 - mean| differ. "
+        "Stored as noise_mean in the checkpoint.",
+    )
     parser.add_argument("--x-max", type=float, default=1.0, help="Domain upper bound in x (lower is 0)")
     parser.add_argument("--y-max", type=float, default=1.0, help="Domain upper bound in y (lower is 0)")
     parser.add_argument("--t-max", type=float, default=0.01, help="Domain upper bound in t (lower is 0)")
@@ -639,6 +647,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--hard-ic-tau must be >= 0")
     if args.noise_amplitude is not None and args.noise_amplitude <= 0:
         parser.error("--noise-amplitude must be > 0")
+    if not -1.0 < args.noise_mean < 1.0:
+        parser.error("--noise-mean must be in (-1, 1)")
     if args.output_scale <= 0:
         parser.error("--output-scale must be > 0")
     if args.output_scale_ic and args.output_scale != 1.0:
@@ -744,8 +754,9 @@ def train(args: argparse.Namespace) -> None:
     if args.noise_amplitude is None:
         args.noise_amplitude = ics_module._NOISE_AMPLITUDE_2D
     ics_module.set_noise_amplitude_2d(args.noise_amplitude)
+    ics_module.set_noise_mean_2d(args.noise_mean)
     if args.ic == "noise" and args.dim == 2:
-        print(f"noise IC amplitude: {args.noise_amplitude:g}")
+        print(f"noise IC amplitude: {args.noise_amplitude:g}, mean: {args.noise_mean:g}")
 
     if args.output_scale_ic:
         # Written back into args, so the checkpoint (and load_model) has the number.

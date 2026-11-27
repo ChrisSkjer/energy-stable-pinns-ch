@@ -83,3 +83,20 @@ def test_hard_ic_kwargs_is_empty_without_the_flag():
     kwargs = hard_ic_kwargs({"hard_ic": True, "dim": 1, "ic": "cosine", "epsilon": 0.05, "hard_ic_tau": 1e-3})
     assert isinstance(kwargs["hard_ic"], InitialConditionField)
     assert kwargs["hard_ic_tau"] == 1e-3 and kwargs["hard_ic_form"] == "add"
+
+
+def test_noise_mean_shifts_both_ports_and_keeps_the_spread():
+    import src.common.initial_conditions as ics
+
+    xy = np.random.default_rng(3).uniform(0.0, 1.0, size=(2000, 2))
+    base = initial_condition("noise", xy[:, 0], xy[:, 1], epsilon=0.05, seed=42)
+    try:
+        ics.set_noise_mean_2d(0.3)
+        shifted = initial_condition("noise", xy[:, 0], xy[:, 1], epsilon=0.05, seed=42)
+        got = InitialConditionField(2, "noise", 0.05, seed=42)(torch.as_tensor(xy, dtype=torch.float32))
+    finally:
+        ics.set_noise_mean_2d(0.0)
+    np.testing.assert_allclose(shifted, base + 0.3, atol=1e-12)
+    np.testing.assert_allclose(got.squeeze(1).numpy(), shifted, atol=1e-5)
+    with pytest.raises(ValueError):
+        ics.set_noise_mean_2d(1.0)

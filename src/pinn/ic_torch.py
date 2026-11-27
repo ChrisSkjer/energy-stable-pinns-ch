@@ -59,7 +59,7 @@ def _noise(x: torch.Tensor, epsilon: float, coeffs: dict) -> torch.Tensor:
     cos_x = torch.cos(math.pi * x[:, 0:1] * modes)  # (N, n)
     cos_y = torch.cos(math.pi * x[:, 1:2] * modes)  # (N, n)
     field = ((cos_x @ a) * cos_y).sum(dim=1, keepdim=True)
-    return ics._NOISE_MEAN + ics._NOISE_AMPLITUDE_2D * field
+    return ics._NOISE_MEAN_2D + ics._NOISE_AMPLITUDE_2D * field
 
 
 def _step(x: torch.Tensor, epsilon: float, coeffs: dict) -> torch.Tensor:

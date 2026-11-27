@@ -28,7 +28,7 @@ from dolfinx.fem import Constant, Function, assemble_scalar, form, functionspace
 from dolfinx.fem.petsc import NonlinearProblem
 from dolfinx.mesh import CellType, create_unit_interval, create_unit_square
 
-from src.common.initial_conditions import initial_condition, initial_condition_1d, set_noise_amplitude_2d
+from src.common.initial_conditions import initial_condition, initial_condition_1d, set_noise_amplitude_2d, set_noise_mean_2d
 from src.fem.config import CahnHilliardConfig, check_config, config_from_args, newton_options, parse_args
 from src.fem.output import RunOutputs, check_output_dir
 
@@ -82,6 +82,7 @@ def solve(
     # interface starts at its equilibrium width.
     if config.noise_amplitude > 0:
         set_noise_amplitude_2d(config.noise_amplitude)
+    set_noise_mean_2d(config.noise_mean)
     if config.dim == 1:
         u.sub(0).interpolate(
             lambda x: initial_condition_1d(config.ic, x[0], epsilon=config.epsilon, seed=config.seed)
